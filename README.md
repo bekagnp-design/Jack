@@ -45,3 +45,18 @@ supabase functions deploy game --no-verify-jwt --project-ref acknnwflahxlripuybw
 
 - Authentication → URL configuration: Site URL `https://bekagnp-design.github.io/Jack/` and add it to Redirect URLs, so confirmation links come back to the app.
 - Authentication → Providers → Email: turn **Confirm email** off if friends should be able to play right after signing up.
+
+## Telegram Mini App
+
+The same site runs inside Telegram. Players are signed in automatically from
+Telegram's signed `initData` (verified by the `tg-auth` edge function), and
+invite links open the app straight at the table (`t.me/<bot>?startapp=<code>`).
+
+Setup, once:
+
+1. In Telegram, open **@BotFather** → `/newbot` → pick a name and a username (ending in `bot`).
+2. `/newapp` (or `/mybots` → the bot → *Bot Settings* → *Menu Button*) and set the Web App URL to `https://bekagnp-design.github.io/Jack/`.
+3. Supabase → Edge Functions → **Secrets** → add `TELEGRAM_BOT_TOKEN` = the token BotFather gave you.
+4. Put the bot's username (without `@`) into `TELEGRAM_BOT_USERNAME` in `src/config.js` and push.
+
+Offline play (against the computer) needs no account and works outside Telegram too.

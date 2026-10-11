@@ -3,6 +3,7 @@ import { supabase, api, ApiError } from './supabase.js';
 import { t, getLang, setLang, onLangChange, COUNTRIES } from './i18n.js';
 import { cardEl, cardLabel } from './cards.js';
 import { sfx, unlock, soundEnabled, setSound } from './sound.js';
+import { inTelegram, prepareTelegram, telegramSignIn, startParam, roomLinkFor, shareInTelegram, haptic, showBackButton, hideBackButton, telegramLang } from './telegram.js';
 import * as E from '../supabase/functions/game/engine.js';
 
 const app = document.getElementById('app');
@@ -46,13 +47,106 @@ const LAST_ROOM_KEY = 'eleven.lastRoom';
 function rememberRoom(code) { try { if (code) localStorage.setItem(LAST_ROOM_KEY, code); else localStorage.removeItem(LAST_ROOM_KEY); } catch { /* ignore */ } }
 function lastRoom() { try { return localStorage.getItem(LAST_ROOM_KEY) || ''; } catch { return ''; } }
 
-const game = () => S.gameRow?.public ?? null;
+const game = () => (S.local ? S.local.pub : S.gameRow?.public ?? null);
+
+// ---------- offline play ----------
+// The same table, with the engine running in the browser. Nothing leaves the device.
+const LOCAL_ID = 'local-you';
+const OFFLINE_KEY = 'eleven.offline';
+S.local = null; // { state, level, pub, botTimer }
+
+function isLocal() { return !!S.local; }
+function uid() { return isLocal() ? LOCAL_ID : S.user?.id; }
+function hasSavedLocal() { try { return !!localStorage.getItem(OFFLINE_KEY); } catch { return false; } }
+
+function syncLocal() {
+  const st = S.local.state;
+  S.local.pub = E.publicView(st);
+  S.hand = E.handOf(st, 0);
+  S.handVersion = st.version;
+  S.gameRow = { id: 'local', created_at: '', public: S.local.pub };
+  S.room = { id: 'local', code: '', status: st.phase === 'game_over' ? 'finished' : 'playing', host_id: LOCAL_ID, game_id: 'local', target_score: st.targetScore, max_players: st.n, bot_level: S.local.level };
+}
+
+function saveLocal() {
+  try { localStorage.setItem(OFFLINE_KEY, JSON.stringify({ state: S.local.state, level: S.local.level })); } catch { /* ignore */ }
+}
+
+function startLocal({ players, level, target, dealer }) {
+  leaveRoomState();
+  const n = Math.min(4, Math.max(2, Number(players) || 2));
+  const name = S.profile?.nickname || t('log.you');
+  const ps = [{ id: LOCAL_ID, name, bot: false }];
+  for (let i = 1; i < n; i++) ps.push({ id: null, name: `Bot ${i + 1}`, bot: true });
+  const state = E.newGame({ players: ps, targetScore: Number(target) || 11, dealer: dealer ?? Math.floor(Math.random() * n) });
+  state.botLevel = E.BOT_LEVELS.includes(level) ? level : 'normal';
+  S.local = { state, level: state.botLevel, pub: null, botTimer: null };
+  syncLocal();
+  saveLocal();
+  go('#/offline');
+  scheduleLocalBots();
+}
+
+function resumeLocal() {
+  try {
+    const raw = localStorage.getItem(OFFLINE_KEY);
+    if (!raw) return false;
+    const { state, level } = JSON.parse(raw);
+    if (!state?.players || !state.deal) return false;
+    leaveRoomState();
+    S.local = { state, level: level || 'normal', pub: null, botTimer: null };
+    syncLocal();
+    scheduleLocalBots();
+    return true;
+  } catch { return false; }
+}
+
+function localPlay(card, take) {
+  E.play(S.local.state, 0, card, take);
+  S.sel = { card: null, take: new Set() };
+  syncLocal(); saveLocal(); render();
+  scheduleLocalBots();
+}
+
+function scheduleLocalBots() {
+  if (!S.local || S.local.botTimer || !E.isComputerTurn(S.local.state)) return;
+  S.local.botTimer = setTimeout(() => {
+    if (!S.local) return;
+    S.local.botTimer = null;
+    const st = S.local.state;
+    if (!E.isComputerTurn(st)) return;
+    const seat = st.deal.current;
+    const m = E.botMove(st, seat, S.local.level);
+    E.play(st, seat, m.card, m.take);
+    syncLocal(); saveLocal(); render();
+    scheduleLocalBots();
+  }, 950);
+}
+
+function localNextDeal() {
+  if (S.local.state.phase !== 'deal_over') return;
+  E.nextDeal(S.local.state);
+  S.sel = { card: null, take: new Set() };
+  syncLocal(); saveLocal(); render();
+  scheduleLocalBots();
+}
+
+function localNewGame() {
+  const st = S.local.state;
+  startLocal({ players: st.n, level: S.local.level, target: st.targetScore, dealer: (st.dealer + 1) % st.n });
+}
+
+function pauseLocal() {
+  pauseLocalState();
+  go('#/');
+}
 
 // ---------- routing ----------
 function parseRoute() {
   const h = location.hash.replace(/^#\/?/, '');
   const [seg, arg] = h.split('/');
   if (seg === 'room' && arg) return { name: 'room', code: arg.toUpperCase() };
+  if (seg === 'offline') return { name: 'offline' };
   return { name: 'home' };
 }
 function go(hash) { if (location.hash !== hash) location.hash = hash; else enterRoute(); }
@@ -60,10 +154,13 @@ window.addEventListener('hashchange', () => { S.route = parseRoute(); enterRoute
 
 // ---------- boot ----------
 async function boot() {
+  prepareTelegram();
+  if (inTelegram() && telegramLang() && !localStorage.getItem('eleven.lang')) setLang('ka');
   document.documentElement.lang = getLang();
   onLangChange(render);
   const { data: { session } } = await supabase.auth.getSession();
   applySession(session);
+  if (inTelegram() && !S.session) await signInWithTelegram();
   supabase.auth.onAuthStateChange((event, sess) => {
     const had = !!S.session;
     applySession(sess);
@@ -86,6 +183,26 @@ function applySession(session) {
   if (!session) S.profile = null;
 }
 
+// Inside Telegram there is no sign-in form: the app proves who the user is.
+async function signInWithTelegram() {
+  S.tgSigningIn = true;
+  render();
+  try {
+    const res = await telegramSignIn(supabase, getLang());
+    const { data: { session } } = await supabase.auth.getSession();
+    applySession(session);
+    await loadProfile();
+    if (res.needs_profile || !S.profile?.age || !S.profile?.country) S.profileNeeded = true;
+    const code = startParam();
+    if (code && S.route.name !== 'room') S.route = { name: 'room', code };
+    if (code) location.hash = `#/room/${code}`;
+  } catch (e) {
+    S.tgError = e?.message || String(e);
+  } finally {
+    S.tgSigningIn = false;
+  }
+}
+
 async function loadProfile() {
   if (!S.user) return;
   const { data } = await supabase.from('profiles').select('*').eq('id', S.user.id).maybeSingle();
@@ -98,9 +215,22 @@ async function loadProfile() {
 }
 
 function enterRoute() {
+  if (S.route.name === 'offline') {
+    if (!S.local && !resumeLocal()) { go('#/'); return; }
+    render();
+    return;
+  }
+  if (S.local) pauseLocalState();
   if (!S.session) { render(); return; }
   if (S.route.name === 'room') openRoom(S.route.code);
   else { leaveRoomState(); render(); }
+}
+
+function pauseLocalState() {
+  if (S.local?.botTimer) clearTimeout(S.local.botTimer);
+  S.local = null;
+  S.room = null; S.gameRow = null; S.hand = []; S.sel = { card: null, take: new Set() };
+  S.renderedVersion = 0;
 }
 
 // ---------- room data & realtime ----------
@@ -131,6 +261,8 @@ function leaveRoomState() {
   if (S.channel) { supabase.removeChannel(S.channel); S.channel = null; }
   if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
   if (S.timerInterval) { clearInterval(S.timerInterval); S.timerInterval = null; }
+  if (S.local?.botTimer) clearTimeout(S.local.botTimer);
+  S.local = null;
   S.room = null; S.seats = []; S.gameRow = null; S.hand = []; S.handVersion = 0; S.pendingHands = {};
   S.sel = { card: null, take: new Set() };
   S.renderedVersion = 0; S.renderedDeal = 0; S.renderedRound = 0;
@@ -217,7 +349,7 @@ function startPolling() {
 }
 
 async function refreshRoom() {
-  if (!S.room || S.busy) return;
+  if (!S.room || S.busy || isLocal()) return;
   try {
     const before = JSON.stringify([S.room.status, S.room.game_id, S.seats.map((s) => s.user_id || s.name), game()?.version, S.handVersion]);
     await loadRoomData();
@@ -257,8 +389,13 @@ async function playSelected(take) {
   const g = game();
   const card = S.sel.card;
   if (!g || !card) return;
-  const gameId = S.gameRow.id;
   const takeList = [...take];
+  haptic(takeList.length ? 'medium' : 'light');
+  if (isLocal()) {
+    try { localPlay(card, takeList); } catch (e) { toast(errMsg(e), 'err'); }
+    return;
+  }
+  const gameId = S.gameRow.id;
   await run(async () => {
     await api('play', { game_id: gameId, card, take: takeList });
     // Optimistic update so the table reacts at once; the server's row replaces it shortly.
@@ -283,8 +420,9 @@ async function playSelected(take) {
 // ---------- helpers ----------
 function mySeat() {
   const g = game();
-  if (g) { const p = g.players.find((p) => p.id === S.user?.id && !p.bot); if (p) return p.seat; }
-  const s = S.seats.find((p) => p.user_id === S.user?.id);
+  const me = uid();
+  if (g) { const p = g.players.find((p) => p.id === me && !p.bot); if (p) return p.seat; }
+  const s = S.seats.find((p) => p.user_id === me);
   return s ? s.seat : -1;
 }
 
@@ -307,6 +445,7 @@ function nameAt(seat) {
 function initial(name) { return (name || '?').trim().charAt(0).toUpperCase(); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function roomLink(code) { return `${location.origin}${location.pathname}#/room/${code}`; }
+function inviteLink(code) { return inTelegram() ? roomLinkFor(code, roomLink(code)) : roomLink(code); }
 
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); }
@@ -324,10 +463,14 @@ function render() {
   const snapshot = S.route.name === 'room' && game() ? snapshotRects() : null;
   cueSounds();
   let html = '';
-  if (!S.session) html = viewAuth();
+  if (isLocal()) html = viewGame();
+  else if (S.tgSigningIn) html = viewLoading();
+  else if (!S.session) html = viewAuth();
   else if (S.route.name === 'room') html = S.room ? (showGame() ? viewGame() : viewLobby()) : viewLoading();
   else html = viewHome();
   if (S.rulesOpen) html += viewRules();
+  if (S.profileNeeded && S.session) html += viewProfileForm();
+  if (inTelegram()) { if (S.route.name === 'home' && !isLocal()) hideBackButton(); else showBackButton(() => { if (isLocal()) pauseLocal(); else go('#/'); }); }
   if (S.toast) html += `<div class="toast ${S.toast.kind}" role="status">${esc(S.toast.msg)}</div>`;
   app.innerHTML = html;
   bind();
@@ -343,6 +486,7 @@ function render() {
 // Turn clock: fills the ring around the player on turn and, when it runs out,
 // asks the server to move for them. Updates the DOM directly, no re-render.
 function tickTimer() {
+  if (isLocal()) return;
   const g = game();
   const d = g?.deal;
   const ring = app.querySelector('.ring');
@@ -368,7 +512,32 @@ function tickTimer() {
 }
 
 function showGame() {
+  if (isLocal()) return true;
   return !!(S.room && game() && (S.room.status === 'playing' || S.room.status === 'finished') && S.room.game_id === S.gameRow?.id);
+}
+
+function viewOfflinePanel() {
+  return `
+      <section class="panel">
+        <h2>${esc(t('offline.panel'))}</h2>
+        <p class="muted">${esc(t('offline.hint'))}</p>
+        ${hasSavedLocal() ? `<div><button class="btn" data-act="resume">${esc(t('offline.resume'))}</button></div>` : ''}
+        <form id="offline-form">
+          <div class="row">
+            <label>${esc(t('home.players'))}
+              <select name="players" id="o-players"><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
+            <label>${esc(t('home.botLevel'))}
+              <select name="level" id="o-level">${botLevelOptions('normal')}</select></label>
+            <label>${esc(t('home.target'))}
+              <select name="target" id="o-target">
+                <option value="11">${esc(t('home.points', { n: 11 }))}</option>
+                <option value="21">${esc(t('home.points', { n: 21 }))}</option>
+                <option value="31">${esc(t('home.points', { n: 31 }))}</option>
+              </select></label>
+          </div>
+          <button class="btn primary" type="submit">${esc(t('offline.play'))}</button>
+        </form>
+      </section>`;
 }
 
 // Turn chime and end-of-deal sounds come from state transitions, not from renders.
@@ -377,7 +546,7 @@ function cueSounds() {
   if (!g || !showGame()) { S.wasMyTurn = false; S.phaseSounded = ''; return; }
   const me = mySeat();
   const myTurn = g.phase === 'deal' && g.deal?.current === me;
-  if (myTurn && !S.wasMyTurn && S.renderedVersion > 0) sfx.turn();
+  if (myTurn && !S.wasMyTurn && S.renderedVersion > 0) { sfx.turn(); haptic('light'); }
   S.wasMyTurn = myTurn;
   const key = `${S.gameRow.id}:${g.dealNo}:${g.phase}`;
   if ((g.phase === 'deal_over' || g.phase === 'game_over') && S.phaseSounded !== key) {
@@ -416,7 +585,24 @@ function viewTopbar(extra = '') {
 }
 
 function viewLoading() {
-  return viewTopbar() + `<main class="page"><p class="muted">…</p></main>`;
+  return viewTopbar() + `<main class="page"><p class="muted">${S.tgError ? esc(S.tgError) : '…'}</p></main>`;
+}
+
+// First launch from Telegram: the two details Telegram does not give us.
+function viewProfileForm() {
+  const countries = COUNTRIES.map((c) => `<option value="${c[0]}" ${S.profile?.country === c[0] ? 'selected' : ''}>${esc(getLang() === 'ka' ? c[2] : c[1])}</option>`).join('');
+  return `<div class="overlay"><div class="sheet" data-stop="1">
+    <h2>${esc(t('home.hello', { name: S.profile?.nickname || '' }))}</h2>
+    <p class="muted">${esc(t('profile.hint'))}</p>
+    <form id="profile-form">
+      <div class="row">
+        <label>${esc(t('auth.age'))}<input name="age" id="p-age" type="number" min="5" max="120" required inputmode="numeric" value="${S.profile?.age ?? ''}"></label>
+        <label>${esc(t('auth.country'))}<select name="country" id="p-country" required><option value="">${esc(t('auth.pickCountry'))}</option>${countries}</select></label>
+      </div>
+      <label>${esc(t('auth.nickname'))}<input name="nickname" id="p-nick" minlength="2" maxlength="24" value="${esc(S.profile?.nickname || '')}"></label>
+      <div class="actions-row"><button class="btn primary" type="submit" ${S.busy ? 'disabled' : ''}>${esc(t('profile.save'))}</button></div>
+    </form>
+  </div></div>`;
 }
 
 function viewAuth() {
@@ -451,6 +637,7 @@ function viewAuth() {
           <a href="#" data-act="authmode" data-mode="${up ? 'signin' : 'signup'}">${esc(up ? t('auth.signin') : t('auth.signup'))}</a></p>
       </form>
     </section>
+    <div class="auth">${viewOfflinePanel()}</div>
   </main>`;
 }
 
@@ -494,6 +681,7 @@ function viewHome() {
         </form>
       </section>
     </div>
+    ${viewOfflinePanel()}
   </main>`;
 }
 
@@ -504,7 +692,7 @@ function botLevelOptions(current) {
 function viewLobby() {
   const r = S.room;
   const host = S.seats.find((s) => s.user_id === r.host_id);
-  const isHost = r.host_id === S.user.id;
+  const isHost = r.host_id === uid();
   const seats = [];
   for (let i = 0; i < r.max_players; i++) {
     const s = S.seats.find((p) => p.seat === i);
@@ -518,11 +706,11 @@ function viewLobby() {
     } else {
       const chips = [];
       if (s.user_id === r.host_id) chips.push(`<span class="chip gold">${esc(t('room.host'))}</span>`);
-      if (s.user_id === S.user.id) chips.push(`<span class="chip">${esc(t('room.you'))}</span>`);
+      if (s.user_id === uid()) chips.push(`<span class="chip">${esc(t('room.you'))}</span>`);
       if (s.away) chips.push(`<span class="chip">${esc(t('game.away'))}</span>`);
       seats.push(`<div class="seat-card"><div class="avatar">${esc(initial(s.name))}</div><div class="name">${esc(s.name)}</div>
         <div class="chips">${chips.join('')}</div>
-        ${isHost && s.user_id !== S.user.id ? `<button class="btn small ghost" data-act="removeseat" data-seat="${i}" ${S.busy ? 'disabled' : ''}>${esc(t('room.remove'))}</button>` : ''}</div>`);
+        ${isHost && s.user_id !== uid() ? `<button class="btn small ghost" data-act="removeseat" data-seat="${i}" ${S.busy ? 'disabled' : ''}>${esc(t('room.remove'))}</button>` : ''}</div>`);
     }
   }
   const finished = r.status === 'finished';
@@ -536,8 +724,9 @@ function viewLobby() {
     <section class="panel">
       <h2>${esc(t('room.invite'))}</h2>
       <p class="muted">${esc(t('room.inviteHint'))}</p>
-      <div class="linkbox"><input id="invite-link" readonly value="${esc(roomLink(r.code))}">
-        <button class="btn" data-act="copylink">${esc(S.copied ? t('room.copied') : t('room.copy'))}</button></div>
+      <div class="linkbox"><input id="invite-link" readonly value="${esc(inviteLink(r.code))}">
+        <button class="btn" data-act="copylink">${esc(S.copied ? t('room.copied') : t('room.copy'))}</button>
+        ${inTelegram() ? `<button class="btn primary" data-act="share">${esc(t('room.share'))}</button>` : ''}</div>
     </section>
     <section class="panel">
       <h2>${esc(t('room.seats'))}</h2>
@@ -584,13 +773,14 @@ function viewGame() {
   for (let i = 1; i < g.n; i++) others.push((anchor + i) % g.n);
 
   const ring = '<span class="ring" style="--p:100%"></span>';
+  const timed = !isLocal() && g.phase === 'deal' && d?.turnStartedAt != null && !g.players[d.current]?.bot && !g.players[d.current]?.away;
   const seatsHtml = others.map((seat, i) => {
     const p = g.players[seat];
     const name = playerName(p);
     const backs = Array.from({ length: d?.handCounts[seat] || 0 }, () => '<div class="card card-back"></div>').join('');
     const current = g.phase === 'deal' && d?.current === seat;
     return `<div class="seat ${positions[i]} ${current ? 'current' : ''} ${p.away ? 'away' : ''}" data-seat="${seat}">
-      <div class="avatar ${p.bot ? 'bot' : ''}">${p.bot ? '⚙' : esc(initial(name))}${current && !p.bot && !p.away ? ring : ''}</div>
+      <div class="avatar ${p.bot ? 'bot' : ''}">${p.bot ? '⚙' : esc(initial(name))}${current && timed ? ring : ''}</div>
       <div class="name">${esc(name)}</div>
       <div class="meta">
         ${p.away ? `<span class="chip">${esc(t('game.away'))}</span>` : ''}
@@ -641,16 +831,17 @@ function viewGame() {
   }
 
   const overlay = (g.phase === 'deal_over' || g.phase === 'game_over') ? viewScore(g, me) : '';
+  const leaveLabel = isLocal() ? t('offline.leave') : t('room.leave');
 
   return `
   <div class="game ${myTurn ? 'my-turn' : ''}">
     <div class="game-top">
-      <div class="l"><span class="code">${esc(S.room.code)}</span><span>${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
+      <div class="l"><span class="code">${esc(isLocal() ? t('offline.title') : S.room.code)}</span><span>${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
       <div class="r">
         ${soundButton()}
         <button class="btn small ghost" data-act="lang" aria-label="${esc(t('lang.switch'))}"><span class="only-wide">${esc(t('lang.switch'))}</span><span class="only-narrow">${esc(t('lang.short'))}</span></button>
         <button class="btn small ghost" data-act="rules" aria-label="${esc(t('nav.rules'))}"><span class="only-wide">${esc(t('nav.rules'))}</span><span class="only-narrow">?</span></button>
-        <button class="btn small ghost danger" data-act="leave" aria-label="${esc(t('room.leave'))}"><span class="only-wide">${esc(t('room.leave'))}</span><span class="only-narrow">✕</span></button>
+        <button class="btn small ghost danger" data-act="leave" aria-label="${esc(leaveLabel)}"><span class="only-wide">${esc(leaveLabel)}</span><span class="only-narrow">✕</span></button>
       </div>
     </div>
     <div class="arena">
@@ -663,7 +854,7 @@ function viewGame() {
     </div>
     <div class="me ${myTurn ? 'current' : ''}" data-seat="${me}">
       <div class="me-info">
-        ${me >= 0 ? `<div class="avatar">${esc(initial(S.profile?.nickname || nameAt(me)))}${myTurn ? ring : ''}</div><span class="name">${esc(S.profile?.nickname || nameAt(me))}</span>
+        ${me >= 0 ? `<div class="avatar">${esc(initial(S.profile?.nickname || nameAt(me)))}${myTurn && timed ? ring : ''}</div><span class="name">${esc(S.profile?.nickname || nameAt(me))}</span>
         <span class="chip">${esc(t('game.score', { n: g.totals[me] }))}</span>
         <span class="chip pile" title="${esc(t('game.taken'))}"><i class="pile-ico"></i>${d ? d.capturedCounts[me] : 0}</span>
         ${g.dealer === me ? `<span class="chip gold" title="${esc(t('game.dealer'))}">D</span>` : ''}` : ''}
@@ -671,7 +862,7 @@ function viewGame() {
       <div class="hand" id="hand"></div>
     </div>
     <div class="actions">
-      <div class="status-line ${myTurn ? 'turn' : ''}">${esc(myTurn && !S.sel.card ? t('game.yourTurn') + ' · ' + status : status)}${g.phase === 'deal' && d?.turnStartedAt != null && !g.players[d.current]?.bot && !g.players[d.current]?.away ? ` <span class="timer"></span>` : ''}</div>
+      <div class="status-line ${myTurn ? 'turn' : ''}">${esc(myTurn && !S.sel.card ? t('game.yourTurn') + ' · ' + status : status)}${timed ? ` <span class="timer"></span>` : ''}</div>
       <div class="buttons">${sumHtml}${takeBtn}${layBtn}</div>
     </div>
     ${overlay}
@@ -761,7 +952,7 @@ function viewScore(g, me) {
   const r = g.dealResults[g.dealResults.length - 1];
   if (!r) return '';
   const over = g.phase === 'game_over';
-  const isHost = S.room.host_id === S.user.id;
+  const isHost = isLocal() || S.room.host_id === uid();
   const rows = g.players.map((p, i) => `
     <tr class="${i === me ? 'is-me' : ''}">
       <td>${esc(playerName(p))}</td>
@@ -777,9 +968,9 @@ function viewScore(g, me) {
   if (!over) buttons = me >= 0 ? `<button class="btn primary" data-act="nextdeal" ${S.busy ? 'disabled' : ''}>${esc(t('score.next'))}</button>` : '';
   else buttons = (isHost
     ? `<button class="btn primary" data-act="start" ${S.busy ? 'disabled' : ''}>${esc(t('score.playAgain'))}</button>
-       <button class="btn" data-act="tolobby" ${S.busy ? 'disabled' : ''}>${esc(t('room.toLobby'))}</button>`
+       ${isLocal() ? '' : `<button class="btn" data-act="tolobby" ${S.busy ? 'disabled' : ''}>${esc(t('room.toLobby'))}</button>`}`
     : `<span class="muted">${esc(t('score.waitingHost', { name: nameAt(S.seats.find((s) => s.user_id === S.room.host_id)?.seat ?? 0) }))}</span>`)
-    + `<button class="btn ghost" data-act="leave" ${S.busy ? 'disabled' : ''}>${esc(t('room.leave'))}</button>`;
+    + `<button class="btn ghost" data-act="leave" ${S.busy ? 'disabled' : ''}>${esc(isLocal() ? t('offline.leave') : t('room.leave'))}</button>`;
   return `
   <div class="overlay">
     <div class="sheet">
@@ -821,6 +1012,20 @@ function bind() {
 
   const authForm = document.getElementById('auth-form');
   if (authForm) authForm.addEventListener('submit', onAuthSubmit);
+  const profileForm = document.getElementById('profile-form');
+  if (profileForm) profileForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(profileForm);
+    const patch = { age: Number(fd.get('age')) || null, country: String(fd.get('country') || '') || null };
+    const nick = String(fd.get('nickname') || '').trim();
+    if (nick.length >= 2) patch.nickname = nick;
+    run(async () => {
+      const { error } = await supabase.from('profiles').update(patch).eq('id', S.user.id);
+      if (error) throw error;
+      S.profile = { ...S.profile, ...patch };
+      S.profileNeeded = false;
+    });
+  });
   const createForm = document.getElementById('create-form');
   if (createForm) createForm.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -836,33 +1041,41 @@ function bind() {
     const code = String(new FormData(joinForm).get('code') || '').trim().toUpperCase();
     if (code) go(`#/room/${code}`);
   });
+  const offlineForm = document.getElementById('offline-form');
+  if (offlineForm) offlineForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(offlineForm);
+    startLocal({ players: fd.get('players'), level: fd.get('level'), target: fd.get('target') });
+  });
 }
 
 function doAction(act, el) {
   switch (act) {
     case 'home': go('#/'); break;
-    case 'lang': setLang(getLang() === 'ka' ? 'en' : 'ka'); if (S.user) supabase.from('profiles').update({ lang: getLang() }).eq('id', S.user.id).then(() => {}); break;
+    case 'lang': setLang(getLang() === 'ka' ? 'en' : 'ka'); if (S.user) supabase.from('profiles').update({ lang: getLang() }).eq('id', S.user.id).then(() => {}); if (isLocal()) { S.local.state.players[0].name = S.profile?.nickname || t('log.you'); syncLocal(); render(); } break;
     case 'rules': S.rulesOpen = true; render(); break;
     case 'sound': setSound(!soundEnabled()); if (soundEnabled()) sfx.tick(); render(); break;
     case 'closerules': S.rulesOpen = false; render(); break;
     case 'signout': run(async () => { await supabase.auth.signOut(); go('#/'); }); break;
     case 'authmode': S.authMode = el.dataset.mode; S.authError = null; S.authNotice = null; render(); break;
-    case 'copylink': copyText(roomLink(S.room.code)); break;
+    case 'copylink': copyText(inviteLink(S.room.code)); break;
+    case 'share': shareInTelegram(inviteLink(S.room.code), t('room.shareText', { code: S.room.code })); break;
     case 'addbot': run(() => api('add_bot', { room_id: S.room.id })); break;
     case 'removeseat': run(() => api('remove_seat', { room_id: S.room.id, seat: Number(el.dataset.seat) })); break;
     case 'setplayers': run(() => api('update_room', { room_id: S.room.id, max_players: Number(el.value) })); break;
     case 'settarget': run(() => api('update_room', { room_id: S.room.id, target_score: Number(el.value) })); break;
     case 'setlevel': run(() => api('update_room', { room_id: S.room.id, bot_level: el.value })); break;
-    case 'start': run(() => api('start_game', { room_id: S.room.id })); break;
+    case 'start': if (isLocal()) { localNewGame(); break; } run(() => api('start_game', { room_id: S.room.id })); break;
     case 'backto': go(`#/room/${el.dataset.code}`); break;
-    case 'leave': run(async () => {
+    case 'resume': if (resumeLocal()) go('#/offline'); else render(); break;
+    case 'leave': if (isLocal()) { pauseLocal(); break; } run(async () => {
       const res = await api('leave_room', { room_id: S.room.id });
       if (!res?.away) rememberRoom(''); // a seat kept mid-game can be returned to from the home screen
       leaveRoomState(); go('#/');
     }); break;
     case 'take': playSelected(S.sel.take); break;
     case 'lay': playSelected(new Set()); break;
-    case 'nextdeal': run(() => api('next_deal', { game_id: S.gameRow.id })); break;
+    case 'nextdeal': if (isLocal()) { localNextDeal(); break; } run(() => api('next_deal', { game_id: S.gameRow.id })); break;
     case 'tolobby': run(() => api('back_to_lobby', { room_id: S.room.id })); break;
     default: break;
   }
