@@ -2,6 +2,7 @@ import './styles.css';
 import { supabase, api, ApiError } from './supabase.js';
 import { t, getLang, setLang, onLangChange, COUNTRIES } from './i18n.js';
 import { cardEl, cardLabel } from './cards.js';
+import { sfx, unlock, soundEnabled, setSound } from './sound.js';
 import * as E from '../supabase/functions/game/engine.js';
 
 const app = document.getElementById('app');
@@ -34,6 +35,8 @@ const S = {
   renderedVersion: 0,
   renderedDeal: 0,
   renderedRound: 0,
+  wasMyTurn: false,
+  phaseSounded: '',
 };
 
 const game = () => S.gameRow?.public ?? null;
@@ -66,6 +69,8 @@ async function boot() {
   if (S.session) await loadProfile();
   enterRoute();
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.room) refreshRoom(); });
+  document.addEventListener('pointerdown', unlock, { once: true });
+  document.addEventListener('keydown', unlock, { once: true });
 }
 
 function applySession(session) {
@@ -303,6 +308,7 @@ async function copyText(text) {
 // ---------- rendering ----------
 function render() {
   const snapshot = S.route.name === 'room' && game() ? snapshotRects() : null;
+  cueSounds();
   let html = '';
   if (!S.session) html = viewAuth();
   else if (S.route.name === 'room') html = S.room ? (showGame() ? viewGame() : viewLobby()) : viewLoading();
@@ -319,6 +325,33 @@ function showGame() {
   return !!(S.room && game() && (S.room.status === 'playing' || S.room.status === 'finished') && S.room.game_id === S.gameRow?.id);
 }
 
+// Turn chime and end-of-deal sounds come from state transitions, not from renders.
+function cueSounds() {
+  const g = game();
+  if (!g || !showGame()) { S.wasMyTurn = false; S.phaseSounded = ''; return; }
+  const me = mySeat();
+  const myTurn = g.phase === 'deal' && g.deal?.current === me;
+  if (myTurn && !S.wasMyTurn && S.renderedVersion > 0) sfx.turn();
+  S.wasMyTurn = myTurn;
+  const key = `${S.gameRow.id}:${g.dealNo}:${g.phase}`;
+  if ((g.phase === 'deal_over' || g.phase === 'game_over') && S.phaseSounded !== key) {
+    if (S.renderedVersion > 0) {
+      const r = g.dealResults[g.dealResults.length - 1];
+      if (g.phase === 'game_over') sfx.gameOver(g.winner === me);
+      else if (r) sfx.dealOver(me >= 0 && r.points[me] >= Math.max(...r.points));
+    }
+    S.phaseSounded = key;
+  }
+}
+
+function soundButton() {
+  const on = soundEnabled();
+  const icon = on
+    ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>'
+    : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>';
+  return `<button class="btn small ghost icon" data-act="sound" aria-label="${esc(on ? t('sound.on') : t('sound.off'))}" title="${esc(on ? t('sound.on') : t('sound.off'))}">${icon}</button>`;
+}
+
 function viewTopbar(extra = '') {
   return `
   <header class="topbar">
@@ -328,6 +361,7 @@ function viewTopbar(extra = '') {
     <div class="right">
       ${extra}
       ${S.profile ? `<span class="who">${esc(S.profile.nickname)}</span>` : ''}
+      ${soundButton()}
       <button class="btn small ghost" data-act="lang">${esc(t('lang.switch'))}</button>
       <button class="btn small ghost" data-act="rules">${esc(t('nav.rules'))}</button>
       ${S.session ? `<button class="btn small ghost" data-act="signout">${esc(t('nav.signout'))}</button>` : ''}
@@ -553,6 +587,7 @@ function viewGame() {
     <div class="game-top">
       <div class="l"><span class="code">${esc(S.room.code)}</span><span>${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
       <div class="r">
+        ${soundButton()}
         <button class="btn small ghost" data-act="lang" aria-label="${esc(t('lang.switch'))}"><span class="only-wide">${esc(t('lang.switch'))}</span><span class="only-narrow">${esc(t('lang.short'))}</span></button>
         <button class="btn small ghost" data-act="rules" aria-label="${esc(t('nav.rules'))}"><span class="only-wide">${esc(t('nav.rules'))}</span><span class="only-narrow">?</span></button>
         <button class="btn small ghost danger" data-act="leave" aria-label="${esc(t('room.leave'))}"><span class="only-wide">${esc(t('room.leave'))}</span><span class="only-narrow">✕</span></button>
@@ -747,6 +782,7 @@ function doAction(act, el) {
     case 'home': go('#/'); break;
     case 'lang': setLang(getLang() === 'ka' ? 'en' : 'ka'); if (S.user) supabase.from('profiles').update({ lang: getLang() }).eq('id', S.user.id).then(() => {}); break;
     case 'rules': S.rulesOpen = true; render(); break;
+    case 'sound': setSound(!soundEnabled()); if (soundEnabled()) sfx.tick(); render(); break;
     case 'closerules': S.rulesOpen = false; render(); break;
     case 'signout': run(async () => { await supabase.auth.signOut(); go('#/'); }); break;
     case 'authmode': S.authMode = el.dataset.mode; S.authError = null; S.authNotice = null; render(); break;
@@ -809,41 +845,73 @@ function seatRect(seat) {
 }
 
 function animateChanges(prev) {
-  if (REDUCED_MOTION) return;
   const g = game();
   const d = g.deal;
   if (!d) return;
   const me = mySeat();
   const handled = new Set();
+  const newDeal = g.dealNo !== prev.dealNo || prev.version === 0;
+  const newRound = newDeal || d.handRound !== prev.round;
+  const oneStep = g.version === prev.version + 1 && d.log?.length;
 
   // 1. The latest move, when exactly one step happened since the last render.
-  if (g.version === prev.version + 1 && d.log?.length) {
+  if (oneStep) {
     const ev = d.log[d.log.length - 1];
     if (ev.type === 'play') {
       const from = ev.seat === me ? prev.rects[ev.card] : prev.seats[ev.seat];
-      if (from && ev.take?.length) {
-        // Captured cards fly to the taker's pile.
+      if (ev.take?.length) {
+        if (ev.sweep) sfx.sweep(); else sfx.take(ev.take.length + 1);
         const dest = seatRect(ev.seat);
-        if (dest) [ev.card, ...ev.take].forEach((c, i) => {
+        if (from && dest && !REDUCED_MOTION) [ev.card, ...ev.take].forEach((c, i) => {
           const start = c === ev.card ? from : prev.rects[c];
           if (start) flyGhost(c, start, dest, i * 60);
         });
-      } else if (from) {
+      } else {
+        sfx.lay();
         const el = app.querySelector(`#table-cards [data-card="${ev.card}"]`);
-        if (el) { slideIn(el, from, ev.seat === me ? 1 : 0.4); handled.add(ev.card); }
+        if (el && from && !REDUCED_MOTION) { slideIn(el, from, ev.seat === me ? 1 : 0.4); handled.add(ev.card); }
       }
     }
   }
 
-  // 2. Anything that was not on screen before comes from the deck: a new deal, fresh hands, a reload.
+  if (REDUCED_MOTION) return;
+  const deckEl = app.querySelector('.deck');
   const deckRect = app.querySelector('.deck .stack')?.getBoundingClientRect() || app.querySelector('.felt')?.getBoundingClientRect();
   if (!deckRect) return;
+
+  // 2. A new deal starts with a shuffle at the deck.
+  let base = 0;
+  if (newDeal && deckEl) {
+    deckEl.classList.add('shuffling');
+    setTimeout(() => deckEl.classList.remove('shuffling'), 900);
+    sfx.shuffle();
+    base = 780;
+  }
+
+  // 3. Dealing: one card at a time around the table, starting left of the dealer, then the table.
   let i = 0;
+  if (newRound) {
+    for (let k = 0; k < E.HAND_SIZE; k++) {
+      for (let s = 0; s < g.n; s++) {
+        const seat = (g.dealer + 1 + s) % g.n;
+        let el = null;
+        if (seat === me) {
+          el = app.querySelectorAll('#hand [data-card]')[k];
+          if (el && prev.rects[el.dataset.card]) el = null;
+        } else {
+          el = app.querySelectorAll(`.seat[data-seat="${seat}"] .mini-hand .card`)[k];
+        }
+        if (el) { slideIn(el, deckRect, 0.5, base + i * 70); if (el.dataset.card) handled.add(el.dataset.card); i++; }
+      }
+    }
+  }
+  // 4. Anything else that was not on screen before (a new deal's table, a reload) also comes from the deck.
   for (const el of app.querySelectorAll('#hand [data-card], #table-cards [data-card]')) {
     const c = el.dataset.card;
     if (prev.rects[c] || handled.has(c)) continue;
-    slideIn(el, deckRect, 0.5, i++ * 70);
+    slideIn(el, deckRect, 0.5, base + i++ * 70);
   }
+  if (i > 0) sfx.deal(i, base / 1000);
 }
 
 function slideIn(el, from, scale, delay = 0) {

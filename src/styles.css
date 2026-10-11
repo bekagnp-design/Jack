@@ -87,6 +87,7 @@ label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
 .btn.primary:hover { background: linear-gradient(180deg, #efd494, #bf9a4e); }
 .btn.ghost { background: transparent; }
 .btn.small { padding: 6px 12px; font-size: 13px; }
+.btn.icon { padding: 6px 9px; display: inline-grid; place-items: center; line-height: 0; }
 .btn.danger { border-color: #7a3a38; color: #f0a5a2; }
 .btn:disabled { opacity: .45; cursor: default; box-shadow: none; transform: none; }
 
@@ -291,6 +292,26 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 
 /* ---------- animation ---------- */
 .fly-ghost { position: absolute; margin: 0; will-change: transform, opacity; }
+.deck.shuffling .stack .card:nth-child(1) { animation: riffle-a .78s ease-in-out; }
+.deck.shuffling .stack .card:nth-child(2) { animation: riffle-b .78s ease-in-out; }
+.deck.shuffling .stack .card:nth-child(3) { animation: riffle-c .78s ease-in-out; }
+@keyframes riffle-a {
+  0%, 100% { transform: none; }
+  20% { transform: translate(-16px, 2px) rotate(-10deg); }
+  45% { transform: translate(6px, -4px) rotate(4deg); }
+  70% { transform: translate(-10px, 0) rotate(-6deg); }
+}
+@keyframes riffle-b {
+  0%, 100% { transform: translate(2px, -2px); }
+  25% { transform: translate(18px, -6px) rotate(9deg); }
+  50% { transform: translate(-6px, -2px) rotate(-3deg); }
+  75% { transform: translate(12px, -8px) rotate(6deg); }
+}
+@keyframes riffle-c {
+  0%, 100% { transform: translate(4px, -4px); }
+  30% { transform: translate(-12px, -10px) rotate(-7deg); }
+  60% { transform: translate(14px, -2px) rotate(7deg); }
+}
 @media (prefers-reduced-motion: reduce) {
   .card, .seat .avatar { transition: none; animation: none; }
 }

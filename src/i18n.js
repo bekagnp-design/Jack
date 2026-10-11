@@ -9,6 +9,8 @@ const STRINGS = {
     'nav.back': 'Back',
     'lang.switch': 'ქართული',
     'lang.short': 'ქა',
+    'sound.on': 'Sound on',
+    'sound.off': 'Sound off',
 
     'auth.signin': 'Sign in',
     'auth.signup': 'Create account',
@@ -142,6 +144,8 @@ const STRINGS = {
     'nav.back': 'უკან',
     'lang.switch': 'English',
     'lang.short': 'EN',
+    'sound.on': 'ხმა ჩართულია',
+    'sound.off': 'ხმა გამორთულია',
 
     'auth.signin': 'შესვლა',
     'auth.signup': 'ანგარიშის შექმნა',
