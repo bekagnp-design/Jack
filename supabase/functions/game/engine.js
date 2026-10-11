@@ -27,6 +27,7 @@ export const HAND_SIZE = 4;
 export const TABLE_SIZE = 4;
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 4;
+export const TURN_SECONDS = 60; // after this a human's move is made for them
 
 // ---------- cards ----------
 
@@ -135,7 +136,7 @@ export function newGame({ players, targetScore = 11, dealer = 0, rand } = {}) {
     throw new Error('players must be 2 to 4');
   }
   const state = {
-    players: players.map((p, i) => ({ seat: i, id: p.id || null, name: p.name || `Player ${i + 1}`, bot: !!p.bot })),
+    players: players.map((p, i) => ({ seat: i, id: p.id || null, name: p.name || `Player ${i + 1}`, bot: !!p.bot, away: false })),
     n: players.length,
     targetScore,
     dealer: dealer % players.length,
@@ -163,6 +164,7 @@ export function startDeal(state, rand) {
     hands: state.players.map(() => []),
     captured: state.players.map(() => []),
     current: (state.dealer + 1) % state.n,
+    turnStartedAt: Date.now(),
     lastCapturer: null,
     handRound: 0,
     log: [],
@@ -172,6 +174,31 @@ export function startDeal(state, rand) {
   dealHands(state);
   state.version += 1;
   return state;
+}
+
+// The computer moves for bots and for humans who stepped away.
+export function isComputerTurn(state) {
+  if (state.phase !== 'deal') return false;
+  const p = state.players[state.deal.current];
+  return !!(p && (p.bot || p.away));
+}
+
+export function setAway(state, seat, away) {
+  const p = state.players[seat];
+  if (!p || p.bot) return;
+  p.away = !!away;
+  state.version += 1;
+}
+
+// A human takes over a bot's seat (late join) or returns to their own.
+export function seatHuman(state, seat, { id, name }) {
+  const p = state.players[seat];
+  if (!p) throw new GameError('bad_seat', 'No such seat');
+  p.id = id;
+  p.name = name;
+  p.bot = false;
+  p.away = false;
+  state.version += 1;
 }
 
 function dealHands(state) {
@@ -229,8 +256,16 @@ export function play(state, seat, card, take = []) {
     let guard = 0;
     while (d.hands[d.current].length === 0 && guard++ < state.n) d.current = (d.current + 1) % state.n;
   }
+  d.turnStartedAt = Date.now();
   state.version += 1;
   return event;
+}
+
+// True once the player on turn has used up their time.
+export function turnExpired(state, now = Date.now()) {
+  const d = state.deal;
+  if (state.phase !== 'deal' || !d || d.turnStartedAt == null) return false;
+  return now - d.turnStartedAt >= TURN_SECONDS * 1000;
 }
 
 function finishDeal(state) {
@@ -314,6 +349,7 @@ export function publicView(state) {
       handCounts: d.hands.map((h) => h.length),
       capturedCounts: d.captured.map((c) => c.length),
       current: d.current,
+      turnStartedAt: d.turnStartedAt,
       lastCapturer: d.lastCapturer,
       deckCount: d.deck.length,
       handRound: d.handRound,
@@ -326,16 +362,38 @@ export function handOf(state, seat) {
   return state.deal ? state.deal.hands[seat].slice() : [];
 }
 
-// ---------- bot ----------
+// ---------- bots ----------
+//
+// Three levels. All of them only look at what a person at the table could see:
+// their own hand, the table, the piles already taken, and how many cards are
+// left in the deck. Nobody peeks at the deck or at other hands.
+//
+//  easy    takes something about half the time, otherwise plays a random card
+//  normal  always takes the most valuable group, lays down the safest card
+//  hard    normal, plus memory of which cards are gone, the end of the deal,
+//          and the standing in cards and clubs
+
+export const BOT_LEVELS = ['easy', 'normal', 'hard'];
 
 function groupWorth(card, group) {
-  // What a capture is worth to a bot, in rough deal-points.
+  // What a capture is worth, in rough deal-points.
   const all = [card, ...group];
   let w = all.length * 0.35;                       // every card counts toward "most cards"
   w += all.filter((c) => suitOf(c) === 'C').length * 0.4;
   if (all.includes('10D')) w += 1.2;
   if (all.includes('2C')) w += 1.2;
   return w;
+}
+
+// Values v (1..10) for which some group on `table` plus `card` would sum to 11,
+// i.e. what a single number card could take if `card` were laid down.
+function exposedValues(card, table) {
+  const nums = table.filter(isNumber).concat([card]);
+  const out = [];
+  for (let v = 1; v <= 10; v++) {
+    if (sumCombos(TARGET_SUM - v, nums).some((g) => g.includes(card))) out.push(v);
+  }
+  return out;
 }
 
 function layDownCost(card, table) {
@@ -347,26 +405,24 @@ function layDownCost(card, table) {
   if (r === 'J') cost += 6;                        // a furti should not be wasted
   if (r === 'Q' || r === 'K') cost += 0.2;         // only a matching picture can take it
   if (isNumber(card)) {
-    // How many single number cards would now complete 11 with what is on the table?
-    const nums = table.filter(isNumber).concat([card]);
-    const sums = new Set();
-    for (const g of sumCombosAll(nums)) sums.add(g);
-    cost += 0.6 + sums.size * 0.15;
+    cost += 0.6 + exposedValues(card, table).length * 0.15;
     cost += valueOf(card) * 0.02;                  // slight preference for small cards
   }
   return cost;
 }
 
-function sumCombosAll(nums) {
-  // Values v (1..10) such that some subset of `nums` sums to 11 - v.
-  const out = [];
-  for (let v = 1; v <= 10; v++) {
-    if (sumCombos(TARGET_SUM - v, nums).length) out.push(v);
-  }
-  return out;
+function pick(list, rand) { return list[Math.floor(rand() * list.length)]; }
+
+function easyMove(state, seat, rand) {
+  const d = state.deal;
+  const hand = d.hands[seat];
+  const captures = [];
+  for (const card of hand) for (const group of legalCaptures(card, d.table)) captures.push({ card, take: group });
+  if (captures.length && rand() < 0.55) return pick(captures, rand);
+  return { card: pick(hand, rand), take: [] };
 }
 
-export function botMove(state, seat) {
+function normalMove(state, seat) {
   const d = state.deal;
   const hand = d.hands[seat];
   let best = null;
@@ -385,6 +441,77 @@ export function botMove(state, seat) {
     if (!lay || cost < lay.cost) lay = { card, cost };
   }
   return { card: lay.card, take: [] };
+}
+
+function hardMove(state, seat) {
+  const d = state.deal;
+  const hand = d.hands[seat];
+  const n = state.n;
+
+  // Memory: what has already left circulation.
+  const seen = new Set([...d.table, ...hand, ...d.captured.flat()]);
+  const unseen = (r) => 4 - [...seen].filter((c) => rankOf(c) === r).length;
+  const unseenValue = (v) => unseen(v === 1 ? 'A' : String(v));
+  const jacksOut = unseen('J');
+
+  // Standing in the two majority counts.
+  const myCards = d.captured[seat].length;
+  const bestOtherCards = Math.max(0, ...d.captured.map((p, i) => (i === seat ? -1 : p.length)));
+  const myClubs = d.captured[seat].filter((c) => suitOf(c) === 'C').length;
+  const bestOtherClubs = Math.max(0, ...d.captured.map((p, i) => (i === seat ? -1 : p.filter((c) => suitOf(c) === 'C').length)));
+  const clubsLeft = 13 - d.captured.flat().filter((c) => suitOf(c) === 'C').length;
+  const clubsDecided = myClubs > bestOtherClubs + clubsLeft || bestOtherClubs > myClubs + clubsLeft;
+
+  const cardsLeftToPlay = d.hands.reduce((a, h) => a + h.length, 0) + d.deck.length;
+  const lastRound = d.deck.length === 0;
+  const myPlaysLeft = hand.length + Math.floor(d.deck.length / n);
+  const endgame = lastRound && hand.length <= 2;
+
+  let best = null;
+  for (const card of hand) {
+    for (const group of legalCaptures(card, d.table)) {
+      const all = [card, ...group];
+      let w = all.length * 0.4;
+      if (!clubsDecided) w += all.filter((c) => suitOf(c) === 'C').length * 0.5;
+      if (all.includes('10D')) w += 1.3;
+      if (all.includes('2C')) w += 1.3;
+      if (myCards <= bestOtherCards) w += all.length * 0.1;        // behind in cards: every card matters more
+      if (endgame) w += 0.8 + d.table.length * 0.15;               // last taker also gets the leftovers
+      if (rankOf(card) === 'J') {
+        // The furti is worth holding for a fuller table, unless the deal is ending.
+        if (group.length < 3 && !lastRound) w -= 1.6;
+        if (jacksOut === 1) w += 0.3;                                 // nobody else can clear the table after this
+      }
+      if (!best || w > best.w) best = { card, take: group, w };
+    }
+  }
+  if (best && best.w > (endgame ? 0.2 : 0.5)) return { card: best.card, take: best.take };
+
+  let lay = null;
+  for (const card of hand) {
+    const r = rankOf(card);
+    let cost = 0;
+    if (card === '10D' || card === '2C') cost += 5;
+    if (suitOf(card) === 'C' && !clubsDecided) cost += 1.2;
+    if (r === 'J') cost += myPlaysLeft <= 1 ? 0 : 6;
+    if (r === 'Q' || r === 'K') cost += 0.25 * unseen(r);           // safe once the other three are gone
+    if (isNumber(card)) {
+      // Danger = how many unseen single cards could take it, weighted by what they would get.
+      let danger = 0;
+      for (const v of exposedValues(card, d.table)) danger += unseenValue(v);
+      cost += 0.3 + danger * 0.12 + valueOf(card) * 0.02;
+      if (jacksOut > 0) cost += 0.1;                                 // anything on the table can be swept
+    }
+    if (cardsLeftToPlay <= n) cost *= 0.5;                           // the deal is ending, little to lose
+    if (!lay || cost < lay.cost) lay = { card, cost };
+  }
+  return { card: lay.card, take: [] };
+}
+
+export function botMove(state, seat, level = 'normal', rand = Math.random) {
+  if (level === 'easy') return easyMove(state, seat, rand);
+  if (level === 'hard') return hardMove(state, seat);
+  return normalMove(state, seat);
 }
 
 // ---------- errors ----------

@@ -9,6 +9,7 @@ const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 
 const BOT_DELAY_MS = 1100;
+const TIMEOUT_TOLERANCE_MS = 1500; // clients may call auto_play this much before the server clock says so
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const corsHeaders = {
@@ -57,6 +58,7 @@ async function handle(uid: string, body: any) {
     case 'update_room': return updateRoom(uid, body);
     case 'start_game': return startGame(uid, body);
     case 'play': return play(uid, body);
+    case 'auto_play': return autoPlay(uid, body);
     case 'next_deal': return nextDeal(uid, body);
     case 'back_to_lobby': return backToLobby(uid, body);
     default: throw new ApiError('bad_action', `Unknown action: ${body.action}`);
@@ -98,16 +100,26 @@ async function touchRoom(roomId: string, patch: Record<string, unknown> = {}) {
   if (error) throw error;
 }
 
+async function updateSeat(roomId: string, seat: number, patch: Record<string, unknown>) {
+  const { error } = await admin.from('room_players').update(patch).eq('room_id', roomId).eq('seat', seat);
+  if (error) throw error;
+}
+
 // ---------- rooms ----------
+
+function botLevel(v: unknown, dflt = 'normal') {
+  return E.BOT_LEVELS.includes(String(v)) ? String(v) : dflt;
+}
 
 async function createRoom(uid: string, body: any) {
   const max_players = clampInt(body.max_players, 2, 4, 2);
   const target_score = clampInt(body.target_score, 1, 101, 11);
+  const bot_level = botLevel(body.bot_level);
   const name = await profileName(uid);
   let room: any = null;
   for (let attempt = 0; attempt < 5 && !room; attempt++) {
     const { data, error } = await admin.from('rooms')
-      .insert({ code: makeCode(), host_id: uid, max_players, target_score })
+      .insert({ code: makeCode(), host_id: uid, max_players, target_score, bot_level })
       .select('*').maybeSingle();
     if (error && error.code !== '23505') throw error;
     room = data;
@@ -118,24 +130,60 @@ async function createRoom(uid: string, body: any) {
   return { room };
 }
 
+// Join by code. Returning players get their seat back; newcomers take a free
+// seat before the game, or a bot's seat at any time.
 async function joinRoom(uid: string, body: any) {
   const code = String(body.code ?? '').trim().toUpperCase();
   const { data: room } = await admin.from('rooms').select('*').eq('code', code).maybeSingle();
   if (!room) throw new ApiError('room_not_found', 'No room with that code', 404);
-  const { data: seats } = await admin.from('room_players').select('*').eq('room_id', room.id);
-  const mine = (seats ?? []).find((p) => p.user_id === uid);
-  if (mine) return { room };
-  if (room.status !== 'lobby') throw new ApiError('room_started', 'That game has already started');
-  const seat = freeSeat(seats ?? [], room.max_players);
-  if (seat < 0) throw new ApiError('room_full', 'That room is full');
+  const { data: seatRows } = await admin.from('room_players').select('*').eq('room_id', room.id);
+  const seats = seatRows ?? [];
+  const mine = seats.find((p) => p.user_id === uid);
+  if (mine) {
+    if (mine.away) await returnToSeat(room, mine);
+    return { room };
+  }
+
   const name = await profileName(uid);
-  const { error } = await admin.from('room_players').insert({ room_id: room.id, seat, user_id: uid, is_bot: false, name });
-  if (error) {
-    if (error.code === '23505') return { room }; // raced with ourselves
-    throw error;
+  let seat = room.status === 'playing' ? -1 : freeSeat(seats, room.max_players);
+  let takeover: any = null;
+  if (seat < 0) {
+    takeover = seats.find((p) => p.is_bot && !p.user_id);
+    if (!takeover) throw new ApiError(room.status === 'playing' ? 'room_started' : 'room_full', room.status === 'playing' ? 'That game is full' : 'That room is full');
+    seat = takeover.seat;
+  }
+
+  if (takeover) {
+    await updateSeat(room.id, seat, { user_id: uid, is_bot: false, name, away: false });
+    if (room.status === 'playing' && room.game_id) {
+      const state = await loadState(room.game_id);
+      const expected = state.version;
+      E.seatHuman(state, seat, { id: uid, name });
+      await persist(room.game_id, state, expected);
+      scheduleBots(room.game_id);
+    }
+  } else {
+    const { error } = await admin.from('room_players').insert({ room_id: room.id, seat, user_id: uid, is_bot: false, name });
+    if (error) {
+      if (error.code === '23505') return { room }; // raced with ourselves
+      throw error;
+    }
   }
   await touchRoom(room.id);
   return { room };
+}
+
+async function returnToSeat(room: any, mine: any) {
+  await updateSeat(room.id, mine.seat, { away: false });
+  if (room.status === 'playing' && room.game_id) {
+    const state = await loadState(room.game_id);
+    if (state.players[mine.seat]?.away) {
+      const expected = state.version;
+      E.setAway(state, mine.seat, false);
+      await persist(room.game_id, state, expected);
+    }
+  }
+  await touchRoom(room.id);
 }
 
 async function leaveRoom(uid: string, body: any) {
@@ -144,18 +192,16 @@ async function leaveRoom(uid: string, body: any) {
   if (!mine) return { ok: true };
 
   if (room.status === 'playing' && room.game_id) {
-    // Mid-game: a bot takes over the seat so the others can keep playing.
-    await admin.from('room_players').update({ user_id: null, is_bot: true, name: `Bot ${mine.seat + 1}` })
-      .eq('room_id', room.id).eq('seat', mine.seat);
+    // Mid-game the seat stays theirs; the computer plays until they come back.
+    await updateSeat(room.id, mine.seat, { away: true });
     const state = await loadState(room.game_id);
-    const p = state.players[mine.seat];
-    if (p) { p.bot = true; p.id = null; }
     const expected = state.version;
-    state.version += 1;
+    E.setAway(state, mine.seat, true);
     await persist(room.game_id, state, expected);
-    if (room.host_id === uid) await transferHost(room.id, seats.filter((s) => s.user_id && s.user_id !== uid));
+    if (room.host_id === uid) await transferHost(room.id, seats.filter((s) => s.user_id && s.user_id !== uid && !s.away));
+    await touchRoom(room.id);
     scheduleBots(room.game_id);
-    return { ok: true };
+    return { ok: true, away: true };
   }
 
   await admin.from('room_players').delete().eq('room_id', room.id).eq('seat', mine.seat);
@@ -176,7 +222,7 @@ async function transferHost(roomId: string, humans: any[]) {
 async function addBot(uid: string, body: any) {
   const { room, seats } = await loadRoom(body.room_id);
   requireHost(room, uid);
-  if (room.status !== 'lobby') throw new ApiError('room_started', 'The game has already started');
+  if (room.status === 'playing') throw new ApiError('room_started', 'The game has already started');
   const seat = freeSeat(seats, room.max_players);
   if (seat < 0) throw new ApiError('room_full', 'The room is full');
   const { error } = await admin.from('room_players').insert({ room_id: room.id, seat, user_id: null, is_bot: true, name: `Bot ${seat + 1}` });
@@ -188,7 +234,7 @@ async function addBot(uid: string, body: any) {
 async function removeSeat(uid: string, body: any) {
   const { room, seats } = await loadRoom(body.room_id);
   requireHost(room, uid);
-  if (room.status !== 'lobby') throw new ApiError('room_started', 'The game has already started');
+  if (room.status === 'playing') throw new ApiError('room_started', 'The game has already started');
   const target = seats.find((p) => p.seat === Number(body.seat));
   if (!target) return { ok: true };
   if (target.user_id === uid) throw new ApiError('cannot_remove_self', 'Leave the room instead');
@@ -200,7 +246,7 @@ async function removeSeat(uid: string, body: any) {
 async function updateRoom(uid: string, body: any) {
   const { room, seats } = await loadRoom(body.room_id);
   requireHost(room, uid);
-  if (room.status !== 'lobby') throw new ApiError('room_started', 'The game has already started');
+  if (room.status === 'playing') throw new ApiError('room_started', 'The game has already started');
   const patch: Record<string, unknown> = {};
   if (body.max_players != null) {
     const m = clampInt(body.max_players, 2, 4, room.max_players);
@@ -208,6 +254,7 @@ async function updateRoom(uid: string, body: any) {
     patch.max_players = m;
   }
   if (body.target_score != null) patch.target_score = clampInt(body.target_score, 1, 101, room.target_score);
+  if (body.bot_level != null) patch.bot_level = botLevel(body.bot_level, room.bot_level);
   await touchRoom(room.id, patch);
   return { ok: true };
 }
@@ -222,7 +269,7 @@ async function startGame(uid: string, body: any) {
   // Empty seats are filled by bots so the table is always full.
   for (let s = 0; s < room.max_players; s++) {
     if (!seats.some((p) => p.seat === s)) {
-      const row = { room_id: room.id, seat: s, user_id: null, is_bot: true, name: `Bot ${s + 1}` };
+      const row = { room_id: room.id, seat: s, user_id: null, is_bot: true, name: `Bot ${s + 1}`, away: false };
       const { error } = await admin.from('room_players').insert(row);
       if (error) throw error;
       seats.push(row);
@@ -243,6 +290,8 @@ async function startGame(uid: string, body: any) {
     targetScore: room.target_score,
     dealer,
   });
+  state.botLevel = botLevel(room.bot_level);
+  for (const p of seats) if (p.away && !p.is_bot) state.players[p.seat].away = true;
 
   const { data: game, error } = await admin.from('games')
     .insert({ room_id: room.id, public: E.publicView(state), version: state.version })
@@ -309,6 +358,24 @@ async function play(uid: string, body: any) {
   return { ok: true, event, version: state.version };
 }
 
+// Any player at the table may ask the server to move for someone whose time ran out.
+async function autoPlay(uid: string, body: any) {
+  const state = await loadState(body.game_id);
+  seatOf(state, uid);
+  if (state.phase !== 'deal') return { ok: false };
+  if (!E.turnExpired(state, Date.now() + TIMEOUT_TOLERANCE_MS)) {
+    return { ok: false, remainingMs: Math.max(0, state.deal.turnStartedAt + E.TURN_SECONDS * 1000 - Date.now()) };
+  }
+  const seat = state.deal.current;
+  const expected = state.version;
+  const move = E.botMove(state, seat, 'normal'); // a stand-in move for a person, not a bot's level
+  const event = E.play(state, seat, move.card, move.take);
+  event.auto = true;
+  await persist(body.game_id, state, expected);
+  scheduleBots(body.game_id);
+  return { ok: true, version: state.version };
+}
+
 async function nextDeal(uid: string, body: any) {
   const state = await loadState(body.game_id);
   seatOf(state, uid);
@@ -331,8 +398,8 @@ async function backToLobby(uid: string, body: any) {
 
 // ---------- bots ----------
 
-// Bots play after the response is sent, one move per BOT_DELAY_MS, until a
-// human is on turn, the deal ends, or someone else moved in between.
+// The computer plays after the response is sent, one move per BOT_DELAY_MS,
+// for bots and for players who are away, until a present human is on turn.
 function scheduleBots(gameId: string) {
   const p = runBots(gameId).catch((e) => console.error('bots', e));
   const rt = (globalThis as any).EdgeRuntime;
@@ -342,13 +409,14 @@ function scheduleBots(gameId: string) {
 async function runBots(gameId: string) {
   for (let i = 0; i < 64; i++) {
     const state = await loadState(gameId);
-    if (state.phase !== 'deal') return;
-    const seat = state.deal.current;
-    if (seat == null || !state.players[seat].bot) return;
+    if (!E.isComputerTurn(state)) return;
     await new Promise((r) => setTimeout(r, BOT_DELAY_MS));
     const fresh = await loadState(gameId);
     if (fresh.version !== state.version) return; // someone else moved; their request runs the bots
-    const move = E.botMove(fresh, seat);
+    if (!E.isComputerTurn(fresh)) return;
+    const seat = fresh.deal.current;
+    const p = fresh.players[seat];
+    const move = E.botMove(fresh, seat, p.bot ? (fresh.botLevel || 'normal') : 'normal');
     const expected = fresh.version;
     E.play(fresh, seat, move.card, move.take);
     try {

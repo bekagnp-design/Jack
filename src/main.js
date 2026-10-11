@@ -37,7 +37,14 @@ const S = {
   renderedRound: 0,
   wasMyTurn: false,
   phaseSounded: '',
+  clockOffset: 0,     // client clock minus server clock, from the latest game row
+  timerInterval: null,
+  autoPlayedFor: 0,   // game version we already asked the server to move for
 };
+
+const LAST_ROOM_KEY = 'eleven.lastRoom';
+function rememberRoom(code) { try { if (code) localStorage.setItem(LAST_ROOM_KEY, code); else localStorage.removeItem(LAST_ROOM_KEY); } catch { /* ignore */ } }
+function lastRoom() { try { return localStorage.getItem(LAST_ROOM_KEY) || ''; } catch { return ''; } }
 
 const game = () => S.gameRow?.public ?? null;
 
@@ -105,11 +112,13 @@ async function openRoom(code) {
     S.busy = true;
     const { room } = await api('join_room', { code });
     S.room = room;
+    rememberRoom(code);
     await loadRoomData();
     subscribeRoom();
     startPolling();
   } catch (e) {
     toast(errMsg(e), 'err');
+    if (e instanceof ApiError && e.code === 'room_not_found' && lastRoom() === code) rememberRoom('');
     leaveRoomState();
     go('#/');
   } finally {
@@ -121,6 +130,7 @@ async function openRoom(code) {
 function leaveRoomState() {
   if (S.channel) { supabase.removeChannel(S.channel); S.channel = null; }
   if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+  if (S.timerInterval) { clearInterval(S.timerInterval); S.timerInterval = null; }
   S.room = null; S.seats = []; S.gameRow = null; S.hand = []; S.handVersion = 0; S.pendingHands = {};
   S.sel = { card: null, take: new Set() };
   S.renderedVersion = 0; S.renderedDeal = 0; S.renderedRound = 0;
@@ -139,7 +149,7 @@ async function loadRoomData() {
 
 async function loadGame(gameId) {
   const [{ data: g }, { data: h }] = await Promise.all([
-    supabase.from('games').select('id, created_at, public, version').eq('id', gameId).maybeSingle(),
+    supabase.from('games').select('id, created_at, updated_at, public, version').eq('id', gameId).maybeSingle(),
     supabase.from('game_hands').select('*').eq('game_id', gameId).eq('user_id', S.user.id).maybeSingle(),
   ]);
   if (g) acceptGameRow(g);
@@ -151,6 +161,10 @@ function acceptGameRow(row) {
   if (cur && cur.id === row.id && row.public.version < cur.public.version) return;
   if (cur && cur.id !== row.id && row.created_at < cur.created_at) return;
   const changedGame = !cur || cur.id !== row.id;
+  // A fresh row tells us how far our clock is from the server's; the turn timer uses it.
+  if (row.updated_at && (changedGame || row.public.version > cur.public.version)) {
+    S.clockOffset = Date.now() - Date.parse(row.updated_at);
+  }
   S.gameRow = { id: row.id, created_at: row.created_at, public: row.public };
   if (changedGame) {
     S.sel = { card: null, take: new Set() };
@@ -318,7 +332,39 @@ function render() {
   app.innerHTML = html;
   bind();
   if (snapshot && showGame()) animateChanges(snapshot);
-  if (showGame()) { const g = game(); S.renderedVersion = g.version; S.renderedDeal = g.dealNo; S.renderedRound = g.deal?.handRound || 0; }
+  if (showGame()) {
+    const g = game();
+    S.renderedVersion = g.version; S.renderedDeal = g.dealNo; S.renderedRound = g.deal?.handRound || 0;
+    if (!S.timerInterval) S.timerInterval = setInterval(tickTimer, 500);
+    tickTimer();
+  } else if (S.timerInterval) { clearInterval(S.timerInterval); S.timerInterval = null; }
+}
+
+// Turn clock: fills the ring around the player on turn and, when it runs out,
+// asks the server to move for them. Updates the DOM directly, no re-render.
+function tickTimer() {
+  const g = game();
+  const d = g?.deal;
+  const ring = app.querySelector('.ring');
+  const label = app.querySelector('.timer');
+  if (!g || g.phase !== 'deal' || !d || d.turnStartedAt == null) { if (ring) ring.style.setProperty('--p', '0%'); return; }
+  const total = E.TURN_SECONDS * 1000;
+  const elapsed = Date.now() - S.clockOffset - d.turnStartedAt;
+  const left = Math.max(0, total - elapsed);
+  if (ring) {
+    ring.style.setProperty('--p', `${(left / total) * 100}%`);
+    ring.classList.toggle('low', left < 12000);
+  }
+  if (label) label.textContent = t('game.seconds', { s: Math.ceil(left / 1000) });
+  const p = g.players[d.current];
+  const humanOnTurn = p && !p.bot && !p.away;
+  if (left <= 0 && humanOnTurn && S.autoPlayedFor !== g.version && mySeat() >= 0 && !S.busy) {
+    S.autoPlayedFor = g.version;
+    api('auto_play', { game_id: S.gameRow.id }).then((res) => {
+      // Our clock was ahead of the server's: try again when it says the time is up.
+      if (res && res.ok === false && res.remainingMs > 0) setTimeout(() => { if (game()?.version === g.version) S.autoPlayedFor = 0; }, res.remainingMs + 300);
+    }).catch(() => {});
+  }
 }
 
 function showGame() {
@@ -417,6 +463,7 @@ function viewHome() {
       <p>${esc(t('app.tagline'))}</p>
       <div class="deco" id="deco"></div>
       ${name ? `<p class="muted">${esc(t('home.hello', { name }))}</p>` : ''}
+      ${lastRoom() ? `<div><button class="btn" data-act="backto" data-code="${esc(lastRoom())}">${esc(t('home.backTo', { code: lastRoom() }))}</button></div>` : ''}
     </section>
     <div class="grid-2">
       <section class="panel">
@@ -432,6 +479,8 @@ function viewHome() {
                 <option value="31">${esc(t('home.points', { n: 31 }))}</option>
                 <option value="51">${esc(t('home.points', { n: 51 }))}</option>
               </select></label>
+            <label>${esc(t('home.botLevel'))}
+              <select name="bot_level" id="f-level">${botLevelOptions('normal')}</select></label>
           </div>
           <p class="muted">${esc(t('home.createHint'))}</p>
           <button class="btn primary" type="submit" ${S.busy ? 'disabled' : ''}>${esc(t('home.createBtn'))}</button>
@@ -446,6 +495,10 @@ function viewHome() {
       </section>
     </div>
   </main>`;
+}
+
+function botLevelOptions(current) {
+  return E.BOT_LEVELS.map((l) => `<option value="${l}" ${l === current ? 'selected' : ''}>${esc(t(`bot.${l}`))}</option>`).join('');
 }
 
 function viewLobby() {
@@ -466,6 +519,7 @@ function viewLobby() {
       const chips = [];
       if (s.user_id === r.host_id) chips.push(`<span class="chip gold">${esc(t('room.host'))}</span>`);
       if (s.user_id === S.user.id) chips.push(`<span class="chip">${esc(t('room.you'))}</span>`);
+      if (s.away) chips.push(`<span class="chip">${esc(t('game.away'))}</span>`);
       seats.push(`<div class="seat-card"><div class="avatar">${esc(initial(s.name))}</div><div class="name">${esc(s.name)}</div>
         <div class="chips">${chips.join('')}</div>
         ${isHost && s.user_id !== S.user.id ? `<button class="btn small ghost" data-act="removeseat" data-seat="${i}" ${S.busy ? 'disabled' : ''}>${esc(t('room.remove'))}</button>` : ''}</div>`);
@@ -498,12 +552,15 @@ function viewLobby() {
           <select id="set-target" data-act="settarget" ${S.busy ? 'disabled' : ''}>
             ${[11, 21, 31, 51].map((n) => `<option value="${n}" ${n === r.target_score ? 'selected' : ''}>${esc(t('home.points', { n }))}</option>`).join('')}
           </select></label>
+        <label>${esc(t('home.botLevel'))}
+          <select id="set-level" data-act="setlevel" ${S.busy ? 'disabled' : ''}>${botLevelOptions(r.bot_level || 'normal')}</select></label>
       </div>
       <p class="muted">${esc(t('room.startHint'))}</p>
       <div class="row">
         <button class="btn primary" data-act="start" ${S.busy ? 'disabled' : ''}>${esc(finished ? t('score.playAgain') : t('room.start'))}</button>
         <button class="btn ghost danger" data-act="leave" ${S.busy ? 'disabled' : ''}>${esc(t('room.leave'))}</button>
       </div>` : `
+      <p class="muted">${esc(t('score.target', { n: r.target_score }))} · ${esc(t('home.botLevel'))}: ${esc(t(`bot.${r.bot_level || 'normal'}`))}</p>
       <p class="muted">${esc(t('room.waitingHost', { name: host?.name || t('room.host') }))}</p>
       <div class="row"><button class="btn ghost danger" data-act="leave" ${S.busy ? 'disabled' : ''}>${esc(t('room.leave'))}</button></div>`}
     </section>
@@ -526,14 +583,17 @@ function viewGame() {
   const others = [];
   for (let i = 1; i < g.n; i++) others.push((anchor + i) % g.n);
 
+  const ring = '<span class="ring" style="--p:100%"></span>';
   const seatsHtml = others.map((seat, i) => {
     const p = g.players[seat];
     const name = playerName(p);
     const backs = Array.from({ length: d?.handCounts[seat] || 0 }, () => '<div class="card card-back"></div>').join('');
-    return `<div class="seat ${positions[i]} ${d?.current === seat ? 'current' : ''}" data-seat="${seat}">
-      <div class="avatar ${p.bot ? 'bot' : ''}">${p.bot ? '⚙' : esc(initial(name))}</div>
+    const current = g.phase === 'deal' && d?.current === seat;
+    return `<div class="seat ${positions[i]} ${current ? 'current' : ''} ${p.away ? 'away' : ''}" data-seat="${seat}">
+      <div class="avatar ${p.bot ? 'bot' : ''}">${p.bot ? '⚙' : esc(initial(name))}${current && !p.bot && !p.away ? ring : ''}</div>
       <div class="name">${esc(name)}</div>
       <div class="meta">
+        ${p.away ? `<span class="chip">${esc(t('game.away'))}</span>` : ''}
         <span class="chip">${esc(t('game.score', { n: g.totals[seat] }))}</span>
         <span class="chip pile" title="${esc(t('game.taken'))}"><i class="pile-ico"></i>${d ? d.capturedCounts[seat] : 0}</span>
         ${g.dealer === seat ? `<span class="chip gold" title="${esc(t('game.dealer'))}">D</span>` : ''}
@@ -603,7 +663,7 @@ function viewGame() {
     </div>
     <div class="me ${myTurn ? 'current' : ''}" data-seat="${me}">
       <div class="me-info">
-        ${me >= 0 ? `<div class="avatar">${esc(initial(S.profile?.nickname || nameAt(me)))}</div><span class="name">${esc(S.profile?.nickname || nameAt(me))}</span>
+        ${me >= 0 ? `<div class="avatar">${esc(initial(S.profile?.nickname || nameAt(me)))}${myTurn ? ring : ''}</div><span class="name">${esc(S.profile?.nickname || nameAt(me))}</span>
         <span class="chip">${esc(t('game.score', { n: g.totals[me] }))}</span>
         <span class="chip pile" title="${esc(t('game.taken'))}"><i class="pile-ico"></i>${d ? d.capturedCounts[me] : 0}</span>
         ${g.dealer === me ? `<span class="chip gold" title="${esc(t('game.dealer'))}">D</span>` : ''}` : ''}
@@ -611,7 +671,7 @@ function viewGame() {
       <div class="hand" id="hand"></div>
     </div>
     <div class="actions">
-      <div class="status-line ${myTurn ? 'turn' : ''}">${esc(myTurn && !S.sel.card ? t('game.yourTurn') + ' · ' + status : status)}</div>
+      <div class="status-line ${myTurn ? 'turn' : ''}">${esc(myTurn && !S.sel.card ? t('game.yourTurn') + ' · ' + status : status)}${g.phase === 'deal' && d?.turnStartedAt != null && !g.players[d.current]?.bot && !g.players[d.current]?.away ? ` <span class="timer"></span>` : ''}</div>
       <div class="buttons">${sumHtml}${takeBtn}${layBtn}</div>
     </div>
     ${overlay}
@@ -688,9 +748,10 @@ function lastMoveText(g) {
   const who = (seat) => (seat === me ? t('log.you') : nameAt(seat));
   if (ev.type === 'play') {
     const card = cardLabel(ev.card);
-    if (!ev.take?.length) return t('log.laid', { name: who(ev.seat), card });
-    if (ev.sweep) return t('log.sweep', { name: who(ev.seat), card });
-    return t('log.took', { name: who(ev.seat), n: ev.take.length + 1, card });
+    const prefix = ev.auto ? t('game.autoPlayed', { name: who(ev.seat) }) + ' ' : '';
+    if (!ev.take?.length) return prefix + t('log.laid', { name: who(ev.seat), card });
+    if (ev.sweep) return prefix + t('log.sweep', { name: who(ev.seat), card });
+    return prefix + t('log.took', { name: who(ev.seat), n: ev.take.length + 1, card });
   }
   if (ev.type === 'deal') return t('log.dealt');
   return '';
@@ -765,7 +826,7 @@ function bind() {
     e.preventDefault();
     const fd = new FormData(createForm);
     run(async () => {
-      const { room } = await api('create_room', { max_players: fd.get('max_players'), target_score: fd.get('target_score') });
+      const { room } = await api('create_room', { max_players: fd.get('max_players'), target_score: fd.get('target_score'), bot_level: fd.get('bot_level') });
       go(`#/room/${room.code}`);
     });
   });
@@ -791,8 +852,14 @@ function doAction(act, el) {
     case 'removeseat': run(() => api('remove_seat', { room_id: S.room.id, seat: Number(el.dataset.seat) })); break;
     case 'setplayers': run(() => api('update_room', { room_id: S.room.id, max_players: Number(el.value) })); break;
     case 'settarget': run(() => api('update_room', { room_id: S.room.id, target_score: Number(el.value) })); break;
+    case 'setlevel': run(() => api('update_room', { room_id: S.room.id, bot_level: el.value })); break;
     case 'start': run(() => api('start_game', { room_id: S.room.id })); break;
-    case 'leave': run(async () => { await api('leave_room', { room_id: S.room.id }); leaveRoomState(); go('#/'); }); break;
+    case 'backto': go(`#/room/${el.dataset.code}`); break;
+    case 'leave': run(async () => {
+      const res = await api('leave_room', { room_id: S.room.id });
+      if (!res?.away) rememberRoom(''); // a seat kept mid-game can be returned to from the home screen
+      leaveRoomState(); go('#/');
+    }); break;
     case 'take': playSelected(S.sel.take); break;
     case 'lay': playSelected(new Set()); break;
     case 'nextdeal': run(() => api('next_deal', { game_id: S.gameRow.id })); break;

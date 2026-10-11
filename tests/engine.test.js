@@ -97,3 +97,45 @@ test('leftover table cards go to the last capturer', () => {
   const r = s.dealResults[0];
   assert.ok(r.leftoverTo === null || r.leftover.length >= 0);
 });
+
+function duel(levelA, levelB, seed) {
+  const rand = E.seededRandom(seed);
+  const s = E.newGame({ players: [{ id: 'a', name: 'A', bot: true }, { id: 'b', name: 'B', bot: true }], targetScore: 11, rand });
+  let moves = 0;
+  while (s.phase !== 'game_over' && moves++ < 5000) {
+    if (s.phase === 'deal_over') { E.nextDeal(s, rand); continue; }
+    const seat = s.deal.current;
+    const m = E.botMove(s, seat, seat === 0 ? levelA : levelB, rand);
+    E.play(s, seat, m.card, m.take);
+  }
+  return s.winner;
+}
+
+test('every bot level plays legal moves and the levels are ordered', () => {
+  let hardOverEasy = 0, hardOverNormal = 0, normalOverEasy = 0;
+  const N = 120;
+  for (let seed = 1; seed <= N; seed++) {
+    if (duel('hard', 'easy', seed) === 0) hardOverEasy++;
+    if (duel('easy', 'hard', seed) === 1) hardOverEasy++;
+    if (duel('hard', 'normal', seed) === 0) hardOverNormal++;
+    if (duel('normal', 'hard', seed) === 1) hardOverNormal++;
+    if (duel('normal', 'easy', seed) === 0) normalOverEasy++;
+    if (duel('easy', 'normal', seed) === 1) normalOverEasy++;
+  }
+  console.log(`hard>easy ${hardOverEasy}/${2 * N}, hard>normal ${hardOverNormal}/${2 * N}, normal>easy ${normalOverEasy}/${2 * N}`);
+  assert.ok(hardOverEasy > N * 2 * 0.6, 'hard should clearly beat easy');
+  assert.ok(normalOverEasy > N * 2 * 0.6, 'normal should clearly beat easy');
+  assert.ok(hardOverNormal >= N * 2 * 0.5, 'hard should not lose to normal');
+});
+
+test('turn timer', () => {
+  const s = E.newGame({ players: P2, rand: E.seededRandom(3) });
+  assert.equal(E.turnExpired(s, s.deal.turnStartedAt + 1000), false);
+  assert.equal(E.turnExpired(s, s.deal.turnStartedAt + 60000), true);
+  assert.equal(E.isComputerTurn(s), s.players[s.deal.current].bot);
+  E.setAway(s, 0, true);
+  assert.equal(s.players[0].away, true);
+  E.seatHuman(s, 1, { id: 'z', name: 'Z' });
+  assert.equal(s.players[1].bot, false);
+  assert.equal(E.isComputerTurn(s), s.deal.current === 0);
+});

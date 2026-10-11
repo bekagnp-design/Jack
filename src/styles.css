@@ -153,7 +153,19 @@ form { display: grid; gap: 12px; }
 .avatar {
   width: 48px; height: 48px; border-radius: 50%; background: var(--panel-2); border: 2px solid var(--line);
   display: grid; place-items: center; font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--brass);
+  position: relative;
 }
+/* Turn clock: a ring that empties clockwise as the player's time runs out. */
+.ring {
+  position: absolute; inset: -6px; border-radius: 50%; pointer-events: none;
+  background: conic-gradient(var(--brass) var(--p, 100%), transparent 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3.5px), #000 calc(100% - 2.5px));
+  transition: --p .4s linear;
+}
+.ring.low { background: conic-gradient(var(--danger) var(--p, 100%), transparent 0); }
+.seat.away .avatar, .seat.away .name { opacity: .55; }
+.timer { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 500; }
 .avatar.bot { color: var(--muted); font-family: var(--font-body); font-size: 20px; }
 .chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
 .chip.gold { background: var(--brass); color: #2a1d0c; border-color: transparent; font-weight: 700; }
