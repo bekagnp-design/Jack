@@ -150,7 +150,9 @@ async function leaveRoom(uid: string, body: any) {
     const state = await loadState(room.game_id);
     const p = state.players[mine.seat];
     if (p) { p.bot = true; p.id = null; }
-    await persist(room.game_id, state, state.version, { hostId: room.host_id });
+    const expected = state.version;
+    state.version += 1;
+    await persist(room.game_id, state, expected);
     if (room.host_id === uid) await transferHost(room.id, seats.filter((s) => s.user_id && s.user_id !== uid));
     scheduleBots(room.game_id);
     return { ok: true };
@@ -271,7 +273,7 @@ async function writeHands(gameId: string, state: any) {
 
 // Optimistic lock on the secret state's version: whoever updates first wins,
 // the other request sees a conflict and the client simply re-reads.
-async function persist(gameId: string, state: any, expectedVersion: number, opts: { hostId?: string } = {}) {
+async function persist(gameId: string, state: any, expectedVersion: number) {
   const { data, error } = await admin.from('game_secrets')
     .update({ state, updated_at: new Date().toISOString() })
     .eq('game_id', gameId).eq('state->>version', String(expectedVersion))
@@ -291,7 +293,7 @@ async function persist(gameId: string, state: any, expectedVersion: number, opts
   }
 }
 
-async function seatOf(state: any, uid: string) {
+function seatOf(state: any, uid: string) {
   const p = state.players.find((p: any) => p.id === uid && !p.bot);
   if (!p) throw new ApiError('not_in_game', 'You are not in this game', 403);
   return p.seat;
@@ -299,7 +301,7 @@ async function seatOf(state: any, uid: string) {
 
 async function play(uid: string, body: any) {
   const state = await loadState(body.game_id);
-  const seat = await seatOf(state, uid);
+  const seat = seatOf(state, uid);
   const expected = state.version;
   const event = E.play(state, seat, String(body.card), Array.isArray(body.take) ? body.take.map(String) : []);
   await persist(body.game_id, state, expected);
@@ -309,7 +311,7 @@ async function play(uid: string, body: any) {
 
 async function nextDeal(uid: string, body: any) {
   const state = await loadState(body.game_id);
-  await seatOf(state, uid);
+  seatOf(state, uid);
   const expected = state.version;
   if (state.phase !== 'deal_over') return { ok: true, version: state.version };
   E.nextDeal(state);
