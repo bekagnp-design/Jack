@@ -46,6 +46,13 @@
 | ჰოსტინგი (ტესტი) | GitHub Pages (`bekagnp-design.github.io/Jack`) + Supabase „Eleven" |
 | მონაცემები | ხელის კარტები და დასტა კლიენტამდე არასდროს მიდის; ყველა სვლას სერვერი ამოწმებს |
 
+## შემდეგი სესია (რით ვიწყებთ)
+
+1. **შენი ნაბიჯები** (ამის გარეშე ბმული არ გაეშვება): რეპო → Public, Settings → Pages → Source: GitHub Actions; Supabase Auth → Site URL `https://bekagnp-design.github.io/Jack/`, Confirm email გამორთვა; @BotFather-ში ბოტი, `TELEGRAM_BOT_TOKEN` → Supabase Secrets, username → `src/config.js`.
+2. Workflow-ის გაშვება, პირველი რეალური ონლაინ თამაში 2 ადამიანი + ბოტები; Supabase-ის ლოგების შემოწმება (`game`, `tg-auth`).
+3. PWA (manifest + service worker), Telegram-ში „შენი სვლაა" შეტყობინება.
+4. წვრილმანი ვიზუალი რეალური თამაშების მიხედვით.
+
 ## ეტაპები დეტალურად
 
 ### 1. სატესტო HTML ვერსია
