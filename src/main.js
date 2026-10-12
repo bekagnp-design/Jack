@@ -123,7 +123,7 @@ function scheduleLocalBots() {
     E.play(st, seat, m.card, m.take);
     syncLocal(); saveLocal(); render();
     scheduleLocalBots();
-  }, afterDeal ? 3200 : 950);
+  }, afterDeal ? 3200 : 2000);
 }
 
 function localNextDeal() {
@@ -463,7 +463,7 @@ async function copyText(text) {
 
 // ---------- rendering ----------
 function render() {
-  const snapshot = S.route.name === 'room' && game() ? snapshotRects() : null;
+  const snapshot = (S.route.name === 'room' || isLocal()) && game() ? snapshotRects() : null;
   cueSounds();
   let html = '';
   if (isLocal()) html = viewGame();
@@ -1138,21 +1138,20 @@ function animateChanges(prev) {
   const oneStep = g.version === prev.version + 1 && d.log?.length;
 
   // 1. The latest move, when exactly one step happened since the last render.
+  //    The played card is shown face up on the table before anything is taken,
+  //    so you can always see what the other player did.
   if (oneStep) {
     const ev = d.log[d.log.length - 1];
     if (ev.type === 'play') {
-      const from = ev.seat === me ? prev.rects[ev.card] : prev.seats[ev.seat];
-      if (ev.take?.length) {
-        if (ev.sweep) sfx.sweep(); else sfx.take(ev.take.length + 1);
-        const dest = seatRect(ev.seat);
-        if (from && dest && !REDUCED_MOTION) [ev.card, ...ev.take].forEach((c, i) => {
-          const start = c === ev.card ? from : prev.rects[c];
-          if (start) flyGhost(c, start, dest, i * 60);
-        });
+      const mine = ev.seat === me;
+      const box = mine ? prev.rects[ev.card] : prev.seats[ev.seat];
+      const took = ev.take?.length > 0;
+      if (REDUCED_MOTION || !box) {
+        if (took) { if (ev.sweep) sfx.sweep(); else sfx.take(ev.take.length + 1); } else sfx.lay();
       } else {
-        sfx.lay();
-        const el = app.querySelector(`#table-cards [data-card="${ev.card}"]`);
-        if (el && from && !REDUCED_MOTION) { slideIn(el, from, ev.seat === me ? 1 : 0.4); handled.add(ev.card); }
+        const origin = { cx: box.left + box.width / 2, cy: box.top + box.height / 2 };
+        if (took) animateTake(ev, origin, prev, mine);
+        else animateLay(ev, origin, box, mine, handled);
       }
     }
   }
@@ -1205,22 +1204,80 @@ function slideIn(el, from, scale, delay = 0) {
   );
 }
 
-function flyGhost(card, from, to, delay) {
-  const ghost = cardEl(card);
-  ghost.classList.add('fly-ghost');
-  ghost.style.left = `${from.left}px`;
-  ghost.style.top = `${from.top}px`;
-  ghost.style.width = `${from.width}px`;
-  ghost.style.height = `${from.height}px`;
-  fx.appendChild(ghost);
-  const dx = to.left + to.width / 2 - (from.left + from.width / 2);
-  const dy = to.top + to.height / 2 - (from.top + from.height / 2);
-  const anim = ghost.animate(
-    [{ transform: 'none', opacity: 1 }, { transform: `translate(${dx}px, ${dy}px) scale(.35) rotate(8deg)`, opacity: .15 }],
-    { duration: 560, delay, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'forwards' },
-  );
-  anim.onfinish = () => ghost.remove();
-  setTimeout(() => ghost.remove(), delay + 800);
+function cardSize() {
+  const r = app.querySelector('#hand .card, #table-cards .card')?.getBoundingClientRect();
+  return { w: r?.width || 72, h: r?.height || 104 };
+}
+
+// A face-up copy of a card, positioned in the fixed overlay.
+function ghostAt(card, x, y, w, h) {
+  const g = cardEl(card);
+  g.classList.add('fly-ghost');
+  Object.assign(g.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+  fx.appendChild(g);
+  return g;
+}
+
+const EASE = 'cubic-bezier(.2,.8,.2,1)';
+
+// A card laid on the table flies there from its owner and lands face up.
+function animateLay(ev, origin, box, mine, handled) {
+  const el = app.querySelector(`#table-cards [data-card="${ev.card}"]`);
+  if (!el) { sfx.lay(); return; }
+  handled.add(ev.card);
+  const { w, h } = cardSize();
+  const to = el.getBoundingClientRect();
+  const x0 = origin.cx - w / 2, y0 = origin.cy - h / 2;
+  const ghost = ghostAt(ev.card, x0, y0, w, h);
+  el.style.opacity = '0';
+  const done = () => { el.style.opacity = ''; ghost.remove(); };
+  ghost.animate(
+    [{ transform: `scale(${mine ? 1 : .4})`, opacity: mine ? 1 : .6 }, { transform: `translate(${to.left - x0}px, ${to.top - y0}px) scale(1)`, opacity: 1 }],
+    { duration: 650, easing: EASE, fill: 'forwards' },
+  ).onfinish = () => { done(); sfx.lay(); };
+  setTimeout(done, 1000);
+}
+
+// A capture: the played card lands on the cards it takes, they light up for a
+// moment, then everything slides to the taker's pile.
+function animateTake(ev, origin, prev, mine) {
+  const { w, h } = cardSize();
+  const cards = ev.take;
+  const rects = cards.map((c) => prev.rects[c]);
+  const pileBox = seatRect(ev.seat);
+  if (rects.some((r) => !r) || !pileBox) { if (ev.sweep) sfx.sweep(); else sfx.take(cards.length + 1); return; }
+
+  const pile = { x: pileBox.left + pileBox.width / 2, y: pileBox.top + pileBox.height / 2 };
+  const targets = cards.map((c, i) => {
+    const g = ghostAt(c, rects[i].left, rects[i].top, rects[i].width, rects[i].height);
+    g.classList.add('cap-glow');
+    return { g, cx: rects[i].left + rects[i].width / 2, cy: rects[i].top + rects[i].height / 2 };
+  });
+  const gx = targets.reduce((a, t) => a + t.cx, 0) / targets.length;
+  const gy = targets.reduce((a, t) => a + t.cy, 0) / targets.length;
+
+  const x0 = origin.cx - w / 2, y0 = origin.cy - h / 2;
+  const played = ghostAt(ev.card, x0, y0, w, h);
+  played.style.zIndex = '2';
+  const landX = gx - w / 2 + w * 0.22, landY = gy - h / 2 - h * 0.12;
+  const all = [{ g: played, cx: landX + w / 2, cy: landY + h / 2 }, ...targets];
+
+  const sweepOut = () => {
+    if (ev.sweep) sfx.sweep(); else sfx.take(cards.length + 1);
+    all.forEach((t, i) => {
+      t.g.animate(
+        [{ transform: t.g === played ? `translate(${landX - x0}px, ${landY - y0}px) scale(1.04)` : 'none', opacity: 1 },
+         { transform: `translate(${pile.x - t.cx + (t.g === played ? landX - x0 : 0)}px, ${pile.y - t.cy + (t.g === played ? landY - y0 : 0)}px) scale(.3)`, opacity: .1 }],
+        { duration: 540, delay: i * 55, easing: 'cubic-bezier(.5,0,.7,.4)', fill: 'forwards' },
+      );
+    });
+  };
+
+  played.animate(
+    [{ transform: 'scale(.4)', opacity: .6 }, { transform: `translate(${landX - x0}px, ${landY - y0}px) scale(1.04)`, opacity: 1 }],
+    { duration: 600, easing: EASE, fill: 'forwards' },
+  ).onfinish = () => { sfx.tick(); setTimeout(sweepOut, 600); };
+  setTimeout(() => all.forEach((t) => t.g.remove()), 2600);
 }
 
 boot();

@@ -304,6 +304,7 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 
 /* ---------- animation ---------- */
 .fly-ghost { position: absolute; margin: 0; will-change: transform, opacity; }
+.fly-ghost.cap-glow { box-shadow: 0 0 0 3px var(--brass), 0 0 24px rgba(212, 176, 106, .75); }
 .deck.shuffling .stack .card:nth-child(1) { animation: riffle-a .78s ease-in-out; }
 .deck.shuffling .stack .card:nth-child(2) { animation: riffle-b .78s ease-in-out; }
 .deck.shuffling .stack .card:nth-child(3) { animation: riffle-c .78s ease-in-out; }
