@@ -96,10 +96,110 @@ function syncLocal() {
   S.handVersion = st.version;
   S.gameRow = { id: 'local', created_at: '', public: S.local.pub };
   S.room = { id: 'local', code: '', status: st.phase === 'game_over' ? 'finished' : 'playing', host_id: LOCAL_ID, game_id: 'local', target_score: st.targetScore, max_players: st.n, bot_level: S.local.level };
+  const dl = S.local.daily;
+  if (dl && st.phase !== 'deal' && !dl.finished) { dl.finished = true; setTimeout(finishDaily, 1200); }
+}
+
+// ---------- daily deal ----------
+const DAILY_KEY = 'eleven.daily';
+const utcDay = () => new Date().toISOString().slice(0, 10);
+function dailyDone() {
+  try { const v = JSON.parse(localStorage.getItem(DAILY_KEY)); return v && v.day === utcDay() ? v : null; } catch { return null; }
+}
+
+function startDaily() {
+  leaveRoomState();
+  const day = utcDay();
+  const state = E.newDaily(day, { id: LOCAL_ID, name: S.profile?.nickname || t('log.you') });
+  state.botLevel = 'hard';
+  S.local = { state, level: 'hard', pub: null, botTimer: null, daily: { day, moves: [], finished: false, board: null } };
+  syncLocal();
+  go('#/offline');
+  scheduleLocalBots();
+}
+
+async function finishDaily() {
+  const dl = S.local?.daily;
+  if (!dl) return;
+  const r = S.local.state.dealResults[0];
+  dl.result = { points: r.points[0], cards: r.cards[0], rival: r.cards[1] };
+  if (!dailyDone()) { try { localStorage.setItem(DAILY_KEY, JSON.stringify({ day: dl.day, ...dl.result })); } catch { /* ignore */ } }
+  render();
+  if (S.user && !dailyDone()?.submitted) {
+    try {
+      dl.board = await api('daily_submit', { day: dl.day, moves: dl.moves });
+      try { localStorage.setItem(DAILY_KEY, JSON.stringify({ day: dl.day, ...dl.result, submitted: true })); } catch { /* ignore */ }
+    } catch { try { dl.board = await api('daily_get'); } catch { /* offline */ } }
+    render();
+  }
+}
+
+async function openDailySheet() {
+  S.dailySheet = { board: null, result: dailyDone() };
+  render();
+  if (S.user) { try { S.dailySheet.board = await api('daily_get'); } catch { /* ignore */ } render(); }
+}
+
+function viewDailySheet(result, board, inGame) {
+  const rows = (board?.top || []).slice(0, 10).map((r, i) => `<tr class="${r.user_id === S.user?.id ? 'is-me' : ''}"><td>${i + 1}</td><td>${esc(r.nickname)}</td><td>${r.points}</td><td>${r.cards}</td></tr>`).join('');
+  return `<div class="overlay"><div class="sheet" data-stop="1">
+    <h2>${esc(t('daily.title'))}</h2>
+    ${result ? `<p><b>${esc(t('daily.you', { points: result.points, cards: result.cards }))}</b><br><span class="muted">${esc(t('daily.bot', { cards: result.rival ?? 52 - result.cards }))}</span></p>` : ''}
+    ${S.user ? `<h3>${esc(t('daily.board'))}</h3>${rows ? `<table class="score"><tbody>${rows}</tbody></table>` : `<p class="muted">${esc(t('daily.empty'))}</p>`}` : `<p class="muted">${esc(t('daily.signin'))}</p>`}
+    <div class="actions-row">${result ? `<button class="btn" data-act="sharecard">${esc(t('share.btn'))}</button>` : ''}<button class="btn primary" data-act="${inGame ? 'leave' : 'closedaily'}">${esc(t('daily.close'))}</button></div>
+  </div></div>`;
+}
+
+// ---------- share card ----------
+async function shareCard() {
+  const g = game();
+  let headline = t('share.title'); const lines = [];
+  const dl = S.local?.daily;
+  const dd = dl?.result || (S.dailySheet && dailyDone());
+  if (dd && (dl || S.dailySheet)) {
+    headline = t('daily.title');
+    lines.push(t('share.dailyLine', { day: dl?.day || utcDay(), points: dd.points, cards: dd.cards }));
+  } else if (g) {
+    const me = mySeat();
+    if (g.phase === 'game_over') headline = g.winner === me ? t('score.youWin') : t('share.win', { name: playerName(g.players[g.winner]) });
+    g.players.map((p, i) => ({ n: playerName(p), v: g.totals[i] })).sort((a, b) => b.v - a.v).forEach((r) => lines.push(`${r.n}  —  ${r.v}`));
+  }
+  const W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const bg = x.createLinearGradient(0, 0, W, H); bg.addColorStop(0, '#1d3a2f'); bg.addColorStop(1, '#0f1417');
+  x.fillStyle = bg; x.fillRect(0, 0, W, H);
+  x.strokeStyle = '#d4b06a'; x.lineWidth = 10; x.strokeRect(40, 40, W - 80, H - 80);
+  x.textAlign = 'center'; x.fillStyle = '#f6f0df';
+  x.font = '700 150px Georgia, serif'; x.fillText('11', W / 2, 300);
+  x.font = '600 56px "Noto Serif Georgian", Georgia, serif'; x.fillStyle = '#d4b06a'; x.fillText('Eleven · თერთმეტი', W / 2, 390);
+  x.fillStyle = '#f6f0df'; x.font = '700 84px "Noto Serif Georgian", Georgia, serif';
+  x.fillText(headline.slice(0, 22), W / 2, 620);
+  x.font = '600 58px "Noto Sans Georgian", sans-serif';
+  lines.slice(0, 5).forEach((l, i) => x.fillText(l.slice(0, 34), W / 2, 760 + i * 90));
+  x.fillStyle = '#d4b06a'; x.font = '500 40px sans-serif';
+  x.fillText(location.host + location.pathname, W / 2, H - 110);
+  const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+  if (!blob) return;
+  const file = new File([blob], 'eleven.png', { type: 'image/png' });
+  const url = location.origin + location.pathname;
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], text: t('share.text'), url }); return; }
+  } catch (e) { if (e?.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'eleven.png'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+// ---------- stats ----------
+async function loadStats() {
+  if (!S.user) { S.stats = null; return; }
+  try {
+    const { data } = await supabase.from('player_stats').select('*').eq('user_id', S.user.id).maybeSingle();
+    S.stats = data || null;
+  } catch { /* ignore */ }
 }
 
 function saveLocal() {
-  if (!S.local || S.local.tut) return; // the tutorial never overwrites a saved game
+  if (!S.local || S.local.tut || S.local.daily) return; // the tutorial and the daily deal never overwrites a saved game
   try { localStorage.setItem(OFFLINE_KEY, JSON.stringify({ state: S.local.state, level: S.local.level })); } catch { /* ignore */ }
 }
 
@@ -134,6 +234,7 @@ function resumeLocal() {
 
 function localPlay(card, take) {
   const ev = E.play(S.local.state, 0, card, take);
+  if (S.local.daily) S.local.daily.moves.push({ card, take: [...take] });
   if (ev.sweep || (ev.take && ev.take.length >= 3)) botReact('bigTake');
   S.sel = { card: null, take: new Set() };
   syncLocal(); saveLocal(); render();
@@ -190,6 +291,7 @@ window.addEventListener('hashchange', () => { S.route = parseRoute(); enterRoute
 
 // ---------- boot ----------
 async function boot() {
+  if ('serviceWorker' in navigator && !inTelegram()) navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {});
   prepareTelegram();
   if (inTelegram() && telegramLang() && !localStorage.getItem('eleven.lang')) setLang('ka');
   document.documentElement.lang = getLang();
@@ -259,7 +361,7 @@ function enterRoute() {
   if (S.local) pauseLocalState();
   if (!S.session) { render(); return; }
   if (S.route.name === 'room') openRoom(S.route.code);
-  else { leaveRoomState(); render(); }
+  else { leaveRoomState(); render(); loadStats().then(render); }
 }
 
 function pauseLocalState() {
@@ -579,6 +681,7 @@ function render() {
   else if (S.route.name === 'room') html = S.room ? (showGame() ? viewGame() : viewLobby()) : viewLoading();
   else html = viewHome();
   if (S.rulesOpen) html += viewRules();
+  if (S.dailySheet && !isLocal()) html += viewDailySheet(S.dailySheet.result, S.dailySheet.board, false);
   if (S.profileNeeded && S.session) html += viewProfileForm();
   if (inTelegram()) { if (S.route.name === 'home' && !isLocal()) hideBackButton(); else showBackButton(() => { if (isLocal()) pauseLocal(); else go('#/'); }); }
   if (S.toast) html += `<div class="toast ${S.toast.kind}" role="status">${esc(S.toast.msg)}</div>`;
@@ -633,7 +736,8 @@ function viewOfflinePanel() {
       <section class="panel">
         <h2>${esc(t('offline.panel'))}</h2>
         <p class="muted">${esc(t('offline.hint'))}</p>
-        <div><button class="btn" data-act="tutorial">${esc(t('tut.start'))}</button></div>
+        <div><button class="btn" data-act="tutorial">${esc(t('tut.start'))}</button>
+        <button class="btn" data-act="${dailyDone() ? 'dailysheet' : 'daily'}" title="${esc(t('daily.hint'))}">${esc(dailyDone() ? t('daily.played') : t('daily.btn'))}</button></div>
         ${hasSavedLocal() ? `<div><button class="btn" data-act="resume">${esc(t('offline.resume'))}</button></div>` : ''}
         <form id="offline-form">
           <div class="row">
@@ -772,6 +876,7 @@ function viewHome() {
       <p>${esc(t('app.tagline'))}</p>
       <div class="deco" id="deco"></div>
       ${name ? `<p class="muted">${esc(t('home.hello', { name }))}</p>` : ''}
+      ${S.stats?.games ? `<p class="muted">${esc(t('stats.line', { games: S.stats.games, wins: S.stats.wins, streak: S.stats.streak, best: S.stats.best_streak }))}</p>` : ''}
       ${lastRoom() ? `<div><button class="btn" data-act="backto" data-code="${esc(lastRoom())}">${esc(t('home.backTo', { code: lastRoom() }))}</button></div>` : ''}
     </section>
     <div class="grid-2">
@@ -952,7 +1057,9 @@ function viewGame() {
     }
   }
 
-  const overlay = (g.phase === 'deal_over' || g.phase === 'game_over') ? viewScore(g, me) : '';
+  const dly = S.local?.daily;
+  const overlay = dly ? (dly.result ? viewDailySheet(dly.result, dly.board, true) : '')
+    : (g.phase === 'deal_over' || g.phase === 'game_over') ? viewScore(g, me) : '';
   const leaveLabel = S.local?.tut ? t('tut.exit') : isLocal() ? t('offline.leave') : t('room.leave');
 
   return `
@@ -1107,10 +1214,9 @@ function viewScore(g, me) {
   const winnerName = over ? (g.winner === me ? t('score.youWin') : t('score.winner', { name: playerName(g.players[g.winner]) })) : '';
   let buttons = '';
   if (!over) buttons = me >= 0 ? `<button class="btn primary" data-act="nextdeal" ${S.busy ? 'disabled' : ''}>${esc(t('score.next'))}</button>` : '';
-  else buttons = (isHost
-    ? `<button class="btn primary" data-act="start" ${S.busy ? 'disabled' : ''}>${esc(t('score.playAgain'))}</button>
-       ${isLocal() ? '' : `<button class="btn" data-act="tolobby" ${S.busy ? 'disabled' : ''}>${esc(t('room.toLobby'))}</button>`}`
-    : `<span class="muted">${esc(t('score.waitingHost', { name: nameAt(S.seats.find((s) => s.user_id === S.room.host_id)?.seat ?? 0) }))}</span>`)
+  else buttons = `<button class="btn primary" data-act="start" ${S.busy ? 'disabled' : ''}>${esc(t('score.playAgain'))}</button>`
+    + `<button class="btn" data-act="sharecard">${esc(t('share.btn'))}</button>`
+    + (isHost && !isLocal() ? `<button class="btn" data-act="tolobby" ${S.busy ? 'disabled' : ''}>${esc(t('room.toLobby'))}</button>` : '')
     + `<button class="btn ghost" data-act="leave" ${S.busy ? 'disabled' : ''}>${esc(isLocal() ? t('offline.leave') : t('room.leave'))}</button>`;
   return `
   <div class="overlay">
@@ -1291,6 +1397,10 @@ function doAction(act, el) {
     case 'home': go('#/'); break;
     case 'lang': setLang(getLang() === 'ka' ? 'en' : 'ka'); if (S.user) supabase.from('profiles').update({ lang: getLang() }).eq('id', S.user.id).then(() => {}); if (isLocal()) { S.local.state.players[0].name = S.profile?.nickname || t('log.you'); syncLocal(); render(); } break;
     case 'rules': S.rulesOpen = true; render(); break;
+    case 'daily': startDaily(); break;
+    case 'dailysheet': openDailySheet(); break;
+    case 'closedaily': S.dailySheet = null; render(); break;
+    case 'sharecard': shareCard(); break;
     case 'tutorial': startTutorial(); break;
     case 'tutnext': tutNext(); break;
     case 'tutplay': startLocal({ players: 2, level: 'easy', target: 11 }); break;
