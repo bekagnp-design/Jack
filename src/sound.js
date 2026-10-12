@@ -209,6 +209,15 @@ export const sfx = {
       bus.gain.cancelScheduledValues(now); bus.gain.setValueAtTime(bus.gain.value, now); bus.gain.linearRampToValueAtTime(0.0001, now + 0.15);
     };
   },
+  firework() {
+    const c = ac(); if (!c) return;
+    const t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(900, t); o.frequency.exponentialRampToValueAtTime(160, t + 0.35);
+    env(c, o, t, 0.01, 0.025, 0.36); o.start(t); o.stop(t + 0.45);
+    slide(c, t + 0.34, { dur: 0.18, freq: 4200, q: 0.6, peak: 0.12 });
+    for (let i = 0; i < 7; i++) tap(c, t + 0.4 + Math.random() * 0.5, 0.03 + Math.random() * 0.03);
+  },
   special() {
     const c = ac(); if (!c) return;
     const t = c.currentTime;

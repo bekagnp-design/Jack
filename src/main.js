@@ -1553,16 +1553,87 @@ function startDancer() {
   import('./dancer.js').then((m) => m.playDancer(felt, () => sfx.folk(m.DANCER_SECONDS))).catch(() => {});
 }
 
-// A short line of big text over the table, and a puff of sparks.
-function flashBanner(text, kind = '') {
+// The card itself, big, in the middle of the table.
+function showHeroCard(card) {
   const felt = app.querySelector('.felt')?.getBoundingClientRect();
-  const el = document.createElement('div');
-  el.className = `banner-fx ${kind}`;
-  el.textContent = text;
-  el.style.left = `${felt ? felt.left + felt.width / 2 : innerWidth / 2}px`;
-  el.style.top = `${felt ? felt.top + felt.height * 0.22 : innerHeight * 0.3}px`;
+  const w = Math.min(150, Math.max(96, (felt?.width || 500) * 0.2));
+  const el = cardEl(card);
+  el.classList.add('hero-card');
+  el.style.setProperty('--card-w', `${w}px`);
+  el.style.setProperty('--card-h', `${w * 1.44}px`);
+  // to the left of centre, so the dancer keeps the middle of the stage
+  el.style.left = `${felt ? felt.left + felt.width * 0.2 : 120}px`;
+  el.style.top = `${felt ? felt.top + felt.height * 0.12 : 120}px`;
   fx.appendChild(el);
-  setTimeout(() => el.remove(), 1900);
+  setTimeout(() => el.remove(), 2600);
+}
+
+// Fireworks: rockets climb from the bottom of the table and burst into fading sparks.
+function fireworks(rockets = 5) {
+  if (REDUCED_MOTION) return;
+  const felt = app.querySelector('.felt')?.getBoundingClientRect() || { left: 0, top: 0, width: innerWidth, height: innerHeight };
+  // The canvas only covers the table (plus room above it), not the whole screen.
+  const dpr = Math.min(1.5, devicePixelRatio || 1);
+  const ox = felt.left - 20, oy = felt.top - 80, W = felt.width + 40, H = felt.height + 100;
+  const cv = document.createElement('canvas');
+  cv.className = 'fw-canvas';
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  cv.style.cssText = `left:${ox}px;top:${oy}px;width:${W}px;height:${H}px`;
+  fx.appendChild(cv);
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.translate(-ox, -oy);
+  const colors = ['#ffd23f', '#ff5d5d', '#7fe0a0', '#ffffff', '#ff9ad5', '#6fb7ff', '#ffa94d'];
+  const parts = [];
+  const rks = Array.from({ length: rockets }, (_, i) => ({
+    t0: i * 340 + Math.random() * 120,
+    x: felt.left + felt.width * (0.12 + 0.76 * ((i + Math.random() * 0.6) / rockets)),
+    y0: felt.top + felt.height * 0.95,
+    y1: felt.top + felt.height * (0.05 + Math.random() * 0.4),
+    color: colors[i % colors.length], done: false,
+  }));
+  const start = performance.now();
+  let last = start;
+  const tick = (now) => {
+    const t = now - start, dt = Math.min(0.05, (now - last) / 1000); last = now;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.fillRect(ox, oy, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+    for (const r of rks) {
+      if (r.done || t < r.t0) continue;
+      const p = (t - r.t0) / 520;
+      if (p < 1) {
+        const y = r.y0 + (r.y1 - r.y0) * (1 - (1 - p) ** 2);
+        ctx.fillStyle = '#fff3cf'; ctx.beginPath(); ctx.arc(r.x + Math.sin(p * 9) * 2, y, 2.2, 0, 7); ctx.fill();
+      } else {
+        r.done = true;
+        sfx.firework();
+        const ring = Math.random() < 0.5;
+        const n = 52;
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + Math.random() * 0.2;
+          const v = ring ? 190 : 60 + Math.random() * 230;
+          parts.push({ x: r.x, y: r.y1, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1.1 + Math.random() * 0.8, age: 0, c: Math.random() < 0.75 ? r.color : colors[(Math.random() * colors.length) | 0], s: 1.8 + Math.random() * 2 });
+        }
+      }
+    }
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const q = parts[i];
+      q.age += dt;
+      if (q.age >= q.life) { parts.splice(i, 1); continue; }
+      q.vx *= 0.985; q.vy = q.vy * 0.985 + 150 * dt;
+      q.x += q.vx * dt; q.y += q.vy * dt;
+      ctx.globalAlpha = 1 - q.age / q.life;
+      ctx.fillStyle = q.c;
+      ctx.beginPath(); ctx.arc(q.x, q.y, q.s * (1 - 0.4 * q.age / q.life), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    if (t < rks[rks.length - 1].t0 + 520 + 2300 && (parts.length || rks.some((r) => !r.done))) requestAnimationFrame(tick);
+    else cv.remove();
+  };
+  requestAnimationFrame(tick);
+  setTimeout(() => cv.remove(), 6500);
 }
 
 function burst(x, y) {
@@ -1629,14 +1700,15 @@ function animateTake(ev, origin, prev, mine) {
       hold = 1300;
       const gem = all.find((x) => x.g.dataset.card === (special === 'ten' ? '10D' : '2C'));
       if (gem) { gem.g.classList.add('special'); burst(gem.cx, gem.cy); }
-      flashBanner(t(`special.${special}`), 'gold');
+      showHeroCard(special === 'ten' ? '10D' : '2C');
+      fireworks(5);
       sfx.special();
       startDancer();
     } else if (ev.sweep) {
-      hold = 1000; burst(gx, gy); flashBanner(t('banner.sweep')); sfx.tick();
+      hold = 1000; burst(gx, gy); fireworks(2); sfx.tick();
     } else if (E.rankOf(ev.card) === 'J' && cards.length >= 2) {
       sfx.pop();
-      if (stickersOff()) { hold = 800; flashBanner(t('banner.furti')); }
+      if (stickersOff()) { hold = 800; burst(gx, gy); }
       else { hold = 1500; showSticker(stickerFor(ev.seat)); }
     } else sfx.tick();
     setTimeout(sweepOut, hold);

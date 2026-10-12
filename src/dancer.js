@@ -83,8 +83,11 @@ function build(THREE) {
     const brow = mesh(new THREE.BoxGeometry(0.075, 0.016, 0.02), M.hair, s * 0.075, 0.09, 0.172); brow.rotation.z = s * -0.18; head.add(brow);
     const cheek = mesh(new THREE.SphereGeometry(0.034, 12, 10), M.cheek, s * 0.115, -0.035, 0.14); cheek.scale.set(1, 0.7, 0.5); head.add(cheek);
     const ear = mesh(new THREE.SphereGeometry(0.04, 10, 8), M.skin, s * 0.185, 0, 0); ear.scale.set(0.5, 1, 0.8); head.add(ear);
-    const mo = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.1, 4, 10), M.hair);
-    mo.position.set(s * 0.06, -0.062, 0.18); mo.rotation.z = Math.PI / 2 + s * 0.45; head.add(mo);
+    // a big handlebar moustache: thick, rising outward, with curled tips
+    const mo = new THREE.Mesh(new THREE.CapsuleGeometry(0.036, 0.2, 6, 14), M.hair);
+    mo.position.set(s * 0.115, -0.07, 0.172); mo.rotation.z = Math.PI / 2 + s * 0.3; head.add(mo);
+    const tip = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.024, 8, 16, Math.PI * 1.35), M.hair);
+    tip.position.set(s * 0.255, -0.01, 0.14); tip.rotation.z = s > 0 ? Math.PI * 0.1 : Math.PI * 0.9; head.add(tip);
   }
   head.add(mesh(new THREE.SphereGeometry(0.036, 14, 12), M.skin, 0, -0.01, 0.19));
   const mouth = mesh(new THREE.TorusGeometry(0.05, 0.008, 6, 16, Math.PI), M.red, 0, -0.085, 0.172); mouth.rotation.z = Math.PI; head.add(mouth);
@@ -249,7 +252,7 @@ function frame(parts, st, t, dt) {
 export async function playDancer(box, onStart) {
   if (!webglAvailable()) return false;
   const width = Math.round(Math.min(Math.max(box.width, 360), 760));
-  const height = Math.round(Math.min(Math.max(box.height * 0.8, 300), 420));
+  const height = Math.round(Math.min(Math.max(box.height * 1.0, 320), 440)); // headroom for leaps
   const r = await ensureRig(width, height);
   const host = document.getElementById('fx');
   r.canvas.style.left = `${box.left + box.width / 2 - width / 2}px`;

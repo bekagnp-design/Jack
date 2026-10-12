@@ -567,3 +567,13 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 
 .stk { background: #efe5cb; }
 .stk.on { background: #f6edd5; }
+
+/* ---------- the big card and the fireworks ---------- */
+.fw-canvas { position: fixed; z-index: 83; pointer-events: none; }
+.hero-card {
+  position: fixed; z-index: 88; transform: translateX(-50%); pointer-events: none; border-radius: 10px;
+  box-shadow: 0 0 0 3px #ffd877, 0 0 46px 12px rgba(255, 216, 119, .8), 0 18px 40px rgba(0, 0, 0, .5);
+  animation: hero-pop 2.5s cubic-bezier(.2, 1.3, .4, 1) forwards;
+}
+@keyframes hero-pop { 0% { opacity: 0; scale: .2; rotate: -18deg; } 14% { opacity: 1; scale: 1.18; rotate: 5deg; } 26% { scale: 1.05; rotate: -2deg; } 50% { scale: 1.1; rotate: 2deg; } 82% { opacity: 1; } 100% { opacity: 0; scale: .9; translate: 0 -16px; } }
+@media (prefers-reduced-motion: reduce) { .hero-card { animation: none; } }
