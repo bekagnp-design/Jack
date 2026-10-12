@@ -41,7 +41,29 @@ const S = {
   clockOffset: 0,     // client clock minus server clock, from the latest game row
   timerInterval: null,
   autoPlayedFor: 0,   // game version we already asked the server to move for
+  bubbles: {},        // seat -> { id, until }: emotes currently shown
+  emoteCool: 0,       // time before which we may not send another emote
+  picker: false,
+  spam: {},           // seat -> recent emote timestamps
+  autoMuted: new Set(),
 };
+
+// ---------- emotes ----------
+// Quick reactions instead of free text: no insults, no walls of chat.
+// Each opponent can be muted separately; the choice is kept in this browser.
+const EMOTES = [
+  { id: 'gg', icon: '👍' }, { id: 'haha', icon: '😄' }, { id: 'wow', icon: '😮' }, { id: 'furti', icon: '🔥' },
+  { id: 'cheers', icon: '🥂' }, { id: 'thanks', icon: '🙏' }, { id: 'hurry', icon: '⏳' }, { id: 'oops', icon: '😢' },
+];
+const EMOTE_COOLDOWN_MS = 3000;
+const EMOTE_SHOW_MS = 2500;
+const MUTED_KEY = 'eleven.muted';
+const EMOTES_OFF_KEY = 'eleven.emotesOff';
+function loadMuted() { try { return new Set(JSON.parse(localStorage.getItem(MUTED_KEY) || '[]')); } catch { return new Set(); } }
+function saveMuted() { try { localStorage.setItem(MUTED_KEY, JSON.stringify([...S.muted])); } catch { /* ignore */ } }
+function emotesOff() { try { return localStorage.getItem(EMOTES_OFF_KEY) === '1'; } catch { return false; } }
+S.muted = loadMuted();
+function isMuted(playerId) { return emotesOff() || (playerId && (S.muted.has(playerId) || S.autoMuted.has(playerId))); }
 
 const LAST_ROOM_KEY = 'eleven.lastRoom';
 function rememberRoom(code) { try { if (code) localStorage.setItem(LAST_ROOM_KEY, code); else localStorage.removeItem(LAST_ROOM_KEY); } catch { /* ignore */ } }
@@ -102,7 +124,8 @@ function resumeLocal() {
 }
 
 function localPlay(card, take) {
-  E.play(S.local.state, 0, card, take);
+  const ev = E.play(S.local.state, 0, card, take);
+  if (ev.sweep || (ev.take && ev.take.length >= 3)) botReact('bigTake');
   S.sel = { card: null, take: new Set() };
   syncLocal(); saveLocal(); render();
   scheduleLocalBots();
@@ -120,7 +143,8 @@ function scheduleLocalBots() {
     if (!E.isComputerTurn(st)) return;
     const seat = st.deal.current;
     const m = E.botMove(st, seat, S.local.level);
-    E.play(st, seat, m.card, m.take);
+    const ev = E.play(st, seat, m.card, m.take);
+    if (ev.sweep || (ev.take && ev.take.length >= 3)) botReact('bigTake', true);
     syncLocal(); saveLocal(); render();
     scheduleLocalBots();
   }, afterDeal ? 3200 : 2000);
@@ -323,7 +347,7 @@ function acceptHandRow(row) {
 
 function subscribeRoom() {
   const roomId = S.room.id;
-  S.channel = supabase.channel(`room:${roomId}`)
+  S.channel = supabase.channel(`room:${roomId}`, { config: { broadcast: { self: false } } })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, (p) => {
       if (p.eventType === 'DELETE') { toast(t('err.room_not_found'), 'err'); leaveRoomState(); go('#/'); return; }
       const prevGame = S.room?.game_id;
@@ -342,7 +366,72 @@ function subscribeRoom() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'game_hands', filter: `user_id=eq.${S.user.id}` }, (p) => {
       if (p.new) { acceptHandRow(p.new); render(); }
     })
+    .on('broadcast', { event: 'emote' }, ({ payload }) => onEmote(payload))
     .subscribe();
+}
+
+function onEmote(payload) {
+  const g = game();
+  if (!g || !payload || !EMOTES.some((e) => e.id === payload.id)) return;
+  const seat = Number(payload.seat);
+  const p = g.players[seat];
+  if (!p || p.bot || seat === mySeat()) return;
+  // Too many in a short time: mute that player for the rest of the session.
+  const now = Date.now();
+  const recent = (S.spam[seat] = (S.spam[seat] || []).filter((t0) => now - t0 < 12000).concat(now));
+  if (recent.length > 5) S.autoMuted.add(p.id);
+  if (isMuted(p.id)) return;
+  showBubble(seat, payload.id);
+}
+
+function sendEmote(id) {
+  const now = Date.now();
+  if (now < S.emoteCool || !EMOTES.some((e) => e.id === id)) return;
+  S.emoteCool = now + EMOTE_COOLDOWN_MS;
+  S.picker = false;
+  const seat = mySeat();
+  if (seat < 0) { render(); return; }
+  showBubble(seat, id);
+  if (isLocal()) botReact('emote');
+  else if (S.channel) S.channel.send({ type: 'broadcast', event: 'emote', payload: { seat, id } });
+  haptic('light');
+  render();
+}
+
+function showBubble(seat, id) {
+  S.bubbles[seat] = { id, until: Date.now() + EMOTE_SHOW_MS };
+  sfx.pop();
+  applyBubbles();
+  setTimeout(applyBubbles, EMOTE_SHOW_MS + 60);
+}
+
+// Bubbles live in state and are re-attached after every render.
+function applyBubbles() {
+  const now = Date.now();
+  for (const el of document.querySelectorAll('.bubble')) el.remove();
+  const me = mySeat();
+  for (const [seat, b] of Object.entries(S.bubbles)) {
+    if (b.until <= now) { delete S.bubbles[seat]; continue; }
+    const host = Number(seat) === me ? document.querySelector('.me') : document.querySelector(`.seat[data-seat="${seat}"]`);
+    const e = EMOTES.find((x) => x.id === b.id);
+    if (!host || !e) continue;
+    const div = document.createElement('div');
+    div.className = 'bubble';
+    div.innerHTML = `<span class="e">${e.icon}</span><span class="t">${esc(t(`emote.${e.id}`))}</span>`;
+    host.appendChild(div);
+  }
+}
+
+// Offline: the computer reacts now and then, so the table feels alive.
+function botReact(kind, byBot = false) {
+  if (!S.local) return;
+  const bots = S.local.state.players.filter((p) => p.bot).map((p) => p.seat);
+  if (!bots.length) return;
+  const seat = bots[Math.floor(Math.random() * bots.length)];
+  const pick = { emote: ['haha', 'gg', 'cheers'], bigTake: ['wow', 'oops'], bigTakeByBot: ['cheers', 'furti'] }[byBot ? 'bigTakeByBot' : kind];
+  const chance = kind === 'emote' ? 0.55 : 0.5;
+  if (!pick || Math.random() > chance) return;
+  setTimeout(() => { if (S.local && !isMuted(null)) showBubble(seat, pick[Math.floor(Math.random() * pick.length)]); }, 900);
 }
 
 // Safety net: realtime can drop events on flaky connections.
@@ -477,6 +566,7 @@ function render() {
   if (S.toast) html += `<div class="toast ${S.toast.kind}" role="status">${esc(S.toast.msg)}</div>`;
   app.innerHTML = html;
   bind();
+  applyBubbles();
   if (snapshot && showGame()) animateChanges(snapshot);
   if (showGame()) {
     const g = game();
@@ -793,7 +883,7 @@ function viewGame() {
     const current = g.phase === 'deal' && d?.current === seat;
     return `<div class="seat ${positions[i]} ${current ? 'current' : ''} ${p.away ? 'away' : ''}" data-seat="${seat}">
       <div class="avatar ${p.bot ? 'bot' : ''}">${p.bot ? '⚙' : esc(initial(name))}${current && timed ? ring : ''}</div>
-      <div class="name">${esc(name)}</div>
+      <div class="name">${esc(name)}${p.bot || !p.id ? '' : ` <button class="mute-btn ${isMuted(p.id) ? 'on' : ''}" data-act="mute" data-seat="${seat}" aria-label="${esc(isMuted(p.id) ? t('emote.unmute') : t('emote.mute'))}" title="${esc(isMuted(p.id) ? t('emote.unmute') : t('emote.mute'))}">${isMuted(p.id) ? '🔇' : '🔈'}</button>`}</div>
       <div class="meta">
         ${p.away ? `<span class="chip">${esc(t('game.away'))}</span>` : ''}
         <span class="chip">${esc(t('game.score', { n: g.totals[seat] }))}</span>
@@ -848,8 +938,9 @@ function viewGame() {
   return `
   <div class="game ${myTurn ? 'my-turn' : ''}">
     <div class="game-top">
-      <div class="l"><span class="code">${esc(isLocal() ? t('offline.title') : S.room.code)}</span><span>${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
+      <div class="l"><span class="code">${esc(isLocal() ? t('offline.title') : S.room.code)}</span><span class="only-wide">${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
       <div class="r">
+        <button class="btn small ghost icon emote-btn" data-act="emotes" aria-label="${esc(t('emote.title'))}" title="${esc(t('emote.title'))}">😊</button>
         ${soundButton()}
         <button class="btn small ghost" data-act="lang" aria-label="${esc(t('lang.switch'))}"><span class="only-wide">${esc(t('lang.switch'))}</span><span class="only-narrow">${esc(t('lang.short'))}</span></button>
         <button class="btn small ghost" data-act="rules" aria-label="${esc(t('nav.rules'))}"><span class="only-wide">${esc(t('nav.rules'))}</span><span class="only-narrow">?</span></button>
@@ -877,7 +968,16 @@ function viewGame() {
       <div class="status-line ${myTurn ? 'turn' : ''}">${esc(myTurn && !S.sel.card ? t('game.yourTurn') + ' · ' + status : status)}${timed ? ` <span class="timer"></span>` : ''}</div>
       <div class="buttons">${sumHtml}${takeBtn}${layBtn}</div>
     </div>
+    ${S.picker ? emotePicker() : ''}
     ${overlay}
+  </div>`;
+}
+
+function emotePicker() {
+  const cool = Date.now() < S.emoteCool;
+  return `<div class="emote-pop" role="dialog" aria-label="${esc(t('emote.title'))}">
+    <div class="emote-grid">${EMOTES.map((e) => `<button class="emote" data-act="emote" data-id="${e.id}" ${cool ? 'disabled' : ''}><span class="e">${e.icon}</span><span class="t">${esc(t(`emote.${e.id}`))}</span></button>`).join('')}</div>
+    <button class="btn small ghost" data-act="emotesoff">${esc(emotesOff() ? t('emote.on') : t('emote.off'))}</button>
   </div>`;
 }
 
@@ -1066,6 +1166,14 @@ function doAction(act, el) {
     case 'home': go('#/'); break;
     case 'lang': setLang(getLang() === 'ka' ? 'en' : 'ka'); if (S.user) supabase.from('profiles').update({ lang: getLang() }).eq('id', S.user.id).then(() => {}); if (isLocal()) { S.local.state.players[0].name = S.profile?.nickname || t('log.you'); syncLocal(); render(); } break;
     case 'rules': S.rulesOpen = true; render(); break;
+    case 'emotes': S.picker = !S.picker; render(); break;
+    case 'emote': sendEmote(el.dataset.id); break;
+    case 'emotesoff': try { localStorage.setItem(EMOTES_OFF_KEY, emotesOff() ? '0' : '1'); } catch { /* ignore */ } S.bubbles = {}; S.picker = false; render(); break;
+    case 'mute': {
+      const pid = game()?.players[Number(el.dataset.seat)]?.id;
+      if (pid) { if (S.muted.has(pid) || S.autoMuted.has(pid)) { S.muted.delete(pid); S.autoMuted.delete(pid); } else S.muted.add(pid); saveMuted(); delete S.bubbles[el.dataset.seat]; }
+      render(); break;
+    }
     case 'sound': setSound(!soundEnabled()); if (soundEnabled()) sfx.tick(); render(); break;
     case 'closerules': S.rulesOpen = false; render(); break;
     case 'signout': run(async () => { await supabase.auth.signOut(); go('#/'); }); break;

@@ -9,6 +9,11 @@ const STRINGS = {
     'nav.back': 'Back',
     'lang.switch': 'ქართული',
     'lang.short': 'ქა',
+    'emote.title': 'Emotes',
+    'emote.gg': 'Well played', 'emote.haha': 'Haha', 'emote.wow': 'Wow!', 'emote.furti': 'Furti!',
+    'emote.cheers': 'Cheers!', 'emote.thanks': 'Thanks', 'emote.hurry': 'Hurry up', 'emote.oops': 'Oh no…',
+    'emote.mute': 'Mute emotes from this player', 'emote.unmute': 'Unmute this player',
+    'emote.off': 'Turn all emotes off', 'emote.on': 'Turn emotes back on',
     'sound.on': 'Sound on',
     'sound.off': 'Sound off',
 
@@ -168,6 +173,11 @@ const STRINGS = {
     'nav.back': 'უკან',
     'lang.switch': 'English',
     'lang.short': 'EN',
+    'emote.title': 'ემოციები',
+    'emote.gg': 'კარგი სვლა', 'emote.haha': 'ჰაჰა', 'emote.wow': 'ვაა!', 'emote.furti': 'ფურთი!',
+    'emote.cheers': 'გაუმარჯოს!', 'emote.thanks': 'მადლობა', 'emote.hurry': 'ჩქარა!', 'emote.oops': 'ეჰ…',
+    'emote.mute': 'ამ მოთამაშის ემოციების გაჩუმება', 'emote.unmute': 'მოთამაშის ხმის დაბრუნება',
+    'emote.off': 'ყველა ემოციის გამორთვა', 'emote.on': 'ემოციების ჩართვა',
     'sound.on': 'ხმა ჩართულია',
     'sound.off': 'ხმა გამორთულია',
 

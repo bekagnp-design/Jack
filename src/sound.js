@@ -145,6 +145,12 @@ export const sfx = {
     const t = c.currentTime;
     (won ? [C5, E5, G5, C6, E6] : [A4, G4, F4]).forEach((f, i) => tone(c, t + i * 0.16, f, 0.5, 0.055, 'triangle'));
   },
+  pop() {
+    const c = ac(); if (!c) return;
+    const t = c.currentTime;
+    tone(c, t, 660, 0.12, 0.045);
+    tone(c, t + 0.06, 990, 0.14, 0.03);
+  },
   tick() {
     const c = ac(); if (!c) return;
     tap(c, c.currentTime, 0.05);
