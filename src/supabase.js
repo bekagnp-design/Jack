@@ -28,3 +28,17 @@ export async function api(action, payload = {}) {
   if (!res.ok) throw new ApiError(body?.error || 'generic', body?.message, res.status);
   return body;
 }
+
+// Account creation goes through the `account` edge function: it confirms the
+// account on the spot, so nobody has to open a confirmation e-mail.
+export async function accountApi(action, payload = {}) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/account`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY },
+    body: JSON.stringify({ action, ...payload }),
+  }).catch(() => { throw new ApiError('offline', 'No connection'); });
+  let body = null;
+  try { body = await res.json(); } catch { /* no body */ }
+  if (!res.ok) throw new ApiError(body?.error || 'generic', body?.message, res.status);
+  return body;
+}

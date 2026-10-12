@@ -25,6 +25,11 @@ const STRINGS = {
     'auth.checkEmail': 'Almost there. Open the confirmation email we sent to {email}, then sign in.',
     'auth.passwordHint': 'At least 6 characters',
     'auth.pickCountry': 'Choose a country',
+    'auth.guestTitle': 'Just play',
+    'auth.guestHint': 'No e-mail or password. Pick a name and sit down; you can play with friends right away.',
+    'auth.guestName': 'Your name (optional)',
+    'auth.guest': 'Play as guest',
+    'room.invited': 'You have been invited to table {code}. Play as a guest or sign in below.',
 
     'home.hello': 'Welcome, {name}',
     'home.create': 'New table',
@@ -152,6 +157,7 @@ const STRINGS = {
     'err.unauthorized': 'Please sign in again.',
     'err.offline': 'No connection. Reconnecting…',
     'err.signin': 'Wrong email or password.',
+    'err.email_taken': 'This e-mail is already registered. Sign in instead.',
     'err.signup': 'Could not create the account: {msg}',
   },
   ka: {
@@ -178,6 +184,11 @@ const STRINGS = {
     'auth.checkEmail': 'თითქმის მზადაა. გახსენი დადასტურების წერილი, რომელიც {email}-ზე გამოგიგზავნეთ, და შემდეგ შედი.',
     'auth.passwordHint': 'მინიმუმ 6 სიმბოლო',
     'auth.pickCountry': 'აირჩიე ქვეყანა',
+    'auth.guestTitle': 'უბრალოდ ვითამაშოთ',
+    'auth.guestHint': 'ელ-ფოსტა და პაროლი არ სჭირდება. აირჩიე სახელი და დაჯექი; მეგობრებთან დაუყოვნებლივ ითამაშებ.',
+    'auth.guestName': 'შენი სახელი (არასავალდებულო)',
+    'auth.guest': 'სტუმრად შესვლა',
+    'room.invited': 'მაგიდაზე {code} მოგიწვიეს. შედი სტუმრად ან ქვემოთ დარეგისტრირდი.',
 
     'home.hello': 'გამარჯობა, {name}',
     'home.create': 'ახალი მაგიდა',
@@ -305,6 +316,7 @@ const STRINGS = {
     'err.unauthorized': 'გთხოვ, თავიდან შედი.',
     'err.offline': 'კავშირი არ არის. ვუკავშირდებით…',
     'err.signin': 'ელ-ფოსტა ან პაროლი არასწორია.',
+    'err.email_taken': 'ეს ელ-ფოსტა უკვე რეგისტრირებულია. შედი ანგარიშში.',
     'err.signup': 'ანგარიში ვერ შეიქმნა: {msg}',
   },
 };

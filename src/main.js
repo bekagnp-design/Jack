@@ -1,5 +1,5 @@
 import './styles.css';
-import { supabase, api, ApiError } from './supabase.js';
+import { supabase, api, accountApi, ApiError } from './supabase.js';
 import { t, getLang, setLang, onLangChange, COUNTRIES } from './i18n.js';
 import { cardEl, cardLabel } from './cards.js';
 import { sfx, unlock, soundEnabled, setSound } from './sound.js';
@@ -618,6 +618,15 @@ function viewAuth() {
       <p>${esc(t('app.tagline'))}</p>
       <div class="deco" id="deco"></div>
     </section>
+    ${S.route.name === 'room' ? `<div class="notice auth">${esc(t('room.invited', { code: S.route.code }))}</div>` : ''}
+    <section class="panel auth">
+      <h2>${esc(t('auth.guestTitle'))}</h2>
+      <p class="muted">${esc(t('auth.guestHint'))}</p>
+      <div class="row">
+        <label>${esc(t('auth.guestName'))}<input id="f-guest" maxlength="24" autocomplete="nickname"></label>
+        <button class="btn primary" type="button" data-act="guest" ${S.busy ? 'disabled' : ''}>${esc(t('auth.guest'))}</button>
+      </div>
+    </section>
     <section class="panel auth">
       <div class="tabs">
         <button type="button" class="${up ? '' : 'on'}" data-act="authmode" data-mode="signin">${esc(t('auth.signin'))}</button>
@@ -1071,6 +1080,7 @@ function doAction(act, el) {
     case 'start': if (isLocal()) { localNewGame(); break; } run(() => api('start_game', { room_id: S.room.id })); break;
     case 'backto': go(`#/room/${el.dataset.code}`); break;
     case 'resume': if (resumeLocal()) go('#/offline'); else render(); break;
+    case 'guest': playAsGuest(); break;
     case 'leave': if (isLocal()) { pauseLocal(); break; } run(async () => {
       const res = await api('leave_room', { room_id: S.room.id });
       if (!res?.away) rememberRoom(''); // a seat kept mid-game can be returned to from the home screen
@@ -1092,20 +1102,40 @@ async function onAuthSubmit(e) {
   S.authError = null; S.authNotice = null;
   await run(async () => {
     if (S.authMode === 'signup') {
-      const data = {
-        nickname: String(fd.get('nickname') || '').trim(),
-        age: Number(fd.get('age')) || null,
-        country: String(fd.get('country') || ''),
-        phone: String(fd.get('phone') || '').trim(),
-        lang: getLang(),
-      };
-      const { data: res, error } = await supabase.auth.signUp({ email, password, options: { data, emailRedirectTo: location.origin + location.pathname } });
-      if (error) { S.authError = t('err.signup', { msg: error.message }); return; }
-      if (!res.session) { S.authNotice = t('auth.checkEmail', { email }); S.authMode = 'signin'; }
-    } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) { S.authError = t('err.signin'); return; }
+      try {
+        await accountApi('signup', {
+          email, password, lang: getLang(),
+          nickname: String(fd.get('nickname') || '').trim(),
+          age: Number(fd.get('age')) || null,
+          country: String(fd.get('country') || ''),
+          phone: String(fd.get('phone') || '').trim(),
+        });
+      } catch (err) {
+        S.authError = err instanceof ApiError && err.code === 'email_taken' ? t('err.email_taken') : t('err.signup', { msg: err.message });
+        return;
+      }
+    }
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) { S.authError = t('err.signin'); return; }
+    await loadProfile();
+  });
+}
+
+async function playAsGuest() {
+  const input = document.getElementById('f-guest');
+  const nickname = input ? input.value.trim() : '';
+  S.authError = null;
+  await run(async () => {
+    try {
+      const res = await accountApi('guest', { nickname, lang: getLang() });
+      const { error } = await supabase.auth.setSession({ access_token: res.access_token, refresh_token: res.refresh_token });
+      if (error) throw error;
+      const { data: { session } } = await supabase.auth.getSession();
+      applySession(session);
       await loadProfile();
+      enterRoute();
+    } catch (err) {
+      S.authError = t('err.signup', { msg: err.message });
     }
   });
 }
