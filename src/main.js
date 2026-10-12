@@ -48,6 +48,12 @@ const S = {
   autoMuted: new Set(),
 };
 
+// ---------- table style ----------
+const THEMES = ['wood', 'linen', 'slate'];
+const THEME_KEY = 'eleven.table';
+function tableTheme() { try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : 'wood'; } catch { return 'wood'; } }
+function nextTheme() { const n = THEMES[(THEMES.indexOf(tableTheme()) + 1) % THEMES.length]; try { localStorage.setItem(THEME_KEY, n); } catch { /* ignore */ } }
+
 // ---------- emotes ----------
 // Quick reactions instead of free text: no insults, no walls of chat.
 // Each opponent can be muted separately; the choice is kept in this browser.
@@ -91,6 +97,7 @@ function syncLocal() {
 }
 
 function saveLocal() {
+  if (!S.local || S.local.tut) return; // the tutorial never overwrites a saved game
   try { localStorage.setItem(OFFLINE_KEY, JSON.stringify({ state: S.local.state, level: S.local.level })); } catch { /* ignore */ }
 }
 
@@ -132,7 +139,7 @@ function localPlay(card, take) {
 }
 
 function scheduleLocalBots() {
-  if (!S.local || S.local.botTimer || !E.isComputerTurn(S.local.state)) return;
+  if (!S.local || S.local.tut || S.local.botTimer || !E.isComputerTurn(S.local.state)) return;
   // Right after a deal the player first needs to see the table and their hand.
   const log = S.local.state.deal.log;
   const afterDeal = log.length && log[log.length - 1].type === 'deal';
@@ -484,6 +491,7 @@ async function playSelected(take) {
   const takeList = [...take];
   haptic(takeList.length ? 'medium' : 'light');
   if (isLocal()) {
+    if (S.local.tut) { tutAttempt(card, takeList); return; }
     try { localPlay(card, takeList); } catch (e) { toast(errMsg(e), 'err'); }
     return;
   }
@@ -614,6 +622,7 @@ function viewOfflinePanel() {
       <section class="panel">
         <h2>${esc(t('offline.panel'))}</h2>
         <p class="muted">${esc(t('offline.hint'))}</p>
+        <div><button class="btn" data-act="tutorial">${esc(t('tut.start'))}</button></div>
         ${hasSavedLocal() ? `<div><button class="btn" data-act="resume">${esc(t('offline.resume'))}</button></div>` : ''}
         <form id="offline-form">
           <div class="row">
@@ -933,13 +942,14 @@ function viewGame() {
   }
 
   const overlay = (g.phase === 'deal_over' || g.phase === 'game_over') ? viewScore(g, me) : '';
-  const leaveLabel = isLocal() ? t('offline.leave') : t('room.leave');
+  const leaveLabel = S.local?.tut ? t('tut.exit') : isLocal() ? t('offline.leave') : t('room.leave');
 
   return `
   <div class="game ${myTurn ? 'my-turn' : ''}">
     <div class="game-top">
-      <div class="l"><span class="code">${esc(isLocal() ? t('offline.title') : S.room.code)}</span><span class="only-wide">${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
+      <div class="l"><span class="code">${esc(S.local?.tut ? t('tut.title') : isLocal() ? t('offline.title') : S.room.code)}</span><span class="only-wide">${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
       <div class="r">
+        <button class="btn small ghost icon" data-act="theme" aria-label="${esc(t('table.theme'))}" title="${esc(t('table.theme'))}">🎨</button>
         <button class="btn small ghost icon emote-btn" data-act="emotes" aria-label="${esc(t('emote.title'))}" title="${esc(t('emote.title'))}">😊</button>
         ${soundButton()}
         <button class="btn small ghost" data-act="lang" aria-label="${esc(t('lang.switch'))}"><span class="only-wide">${esc(t('lang.switch'))}</span><span class="only-narrow">${esc(t('lang.short'))}</span></button>
@@ -949,7 +959,8 @@ function viewGame() {
     </div>
     <div class="arena">
       ${seatsHtml}
-      <div class="felt n${g.n}">
+      ${S.local?.tut ? coachHtml() : ''}
+      <div class="felt n${g.n} t-${tableTheme()}">
         ${tableHtml}
         <div class="last-move">${esc(last)}</div>
         ${deckHtml}
@@ -969,6 +980,7 @@ function viewGame() {
       <div class="buttons">${sumHtml}${takeBtn}${layBtn}</div>
     </div>
     ${S.picker ? emotePicker() : ''}
+    ${S.local?.tut?.finished ? viewTutDone() : ''}
     ${overlay}
   </div>`;
 }
@@ -989,11 +1001,14 @@ function mountGameCards() {
   const myTurn = g.phase === 'deal' && d?.current === me;
   const table = d?.table || [];
   const hints = S.sel.card ? new Set(E.captureHints(S.sel.card, table)) : new Set();
+  const glow = S.local?.tut && !S.local.tut.done && !S.local.tut.finished ? new Set(LESSONS[S.local.tut.i].glow) : null;
 
   const tc = document.getElementById('table-cards');
   if (tc) {
     for (const c of table) {
       const el = cardEl(c, { interactive: myTurn });
+      if (c === '10D' || c === '2C') el.classList.add('gem');
+      if (glow?.has(c)) el.classList.add('coach-glow');
       if (S.sel.take.has(c)) el.classList.add('selected');
       else if (hints.has(c)) el.classList.add('hint');
       if (myTurn && S.sel.card && (hints.has(c) || S.sel.take.has(c))) el.classList.add('pick');
@@ -1008,6 +1023,7 @@ function mountGameCards() {
     for (const c of S.hand) {
       const el = cardEl(c, { interactive: true });
       el.classList.add('pick');
+      if (glow?.has(c)) el.classList.add('coach-glow');
       if (S.sel.card === c) el.classList.add('selected');
       el.addEventListener('click', () => pickHand(c));
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickHand(c); } });
@@ -1022,7 +1038,7 @@ function pickHand(c) {
   if (S.sel.card === c) { S.sel = { card: null, take: new Set() }; render(); return; }
   const table = g.deal?.table || [];
   const groups = E.legalCaptures(c, table);
-  const take = new Set(groups.length === 1 ? groups[0] : []);
+  const take = new Set(groups.length === 1 && !S.local?.tut ? groups[0] : []); // lessons make you pick the cards yourself
   S.sel = { card: c, take };
   render();
 }
@@ -1097,16 +1113,112 @@ function viewScore(g, me) {
   </div>`;
 }
 
+// Worked examples under the rules, drawn with real mini cards (filled in by fillExamples).
+const RULE_EXAMPLES = {
+  2: ['AH + 10S = 11', '2H + 2D + 7C = 11'],
+  3: ['QD → QS', 'KH → KS'],
+  4: ['JC → 3S 8H 5D'],
+  7: ['10D 2C'],
+};
+
 function viewRules() {
-  const items = [1, 2, 3, 4, 5, 6, 7].map((i) => `<li>${esc(t(`rules.${i}`))}</li>`).join('');
+  const items = [1, 2, 3, 4, 5, 6, 7].map((i) => `<li><p>${esc(t(`rules.${i}`))}</p>${(RULE_EXAMPLES[i] || []).map((ex) => `<div class="ex" data-ex="${ex}"></div>`).join('')}</li>`).join('');
   return `<div class="overlay" data-act="closerules"><div class="sheet rules" data-stop="1">
     <h2>${esc(t('rules.title'))}</h2><ol>${items}</ol>
-    <div class="actions-row"><button class="btn" data-act="closerules">${esc(t('nav.back'))}</button></div></div></div>`;
+    <div class="actions-row"><button class="btn primary" data-act="tutorial">${esc(t('tut.start'))}</button><button class="btn" data-act="closerules">${esc(t('nav.back'))}</button></div></div></div>`;
+}
+
+function fillExamples() {
+  for (const el of document.querySelectorAll('[data-ex]')) {
+    if (el.childElementCount) continue;
+    for (const tok of el.dataset.ex.split(' ')) {
+      if (/^(A|10|[2-9JQK])[SHDC]$/.test(tok)) {
+        const c = cardEl(tok);
+        if (tok === '10D' || tok === '2C') c.classList.add('gem');
+        el.appendChild(c);
+      } else { const op = document.createElement('span'); op.className = 'op'; op.textContent = tok; el.appendChild(op); }
+    }
+  }
+}
+
+// ---------- tutorial ----------
+// Seven short lessons on a scripted table. Wrong moves are not played; right
+// ones run through the normal animations, sounds and special-card effects.
+const LESSONS = [
+  { id: 'sum', hand: ['AH', 'KS', '3D', '9C'], table: ['10S', '5D', 'QH', '8C'], card: 'AH', take: ['10S'], glow: ['AH', '10S'] },
+  { id: 'multi', hand: ['2H', 'KD', '6S', 'JC'], table: ['2D', '7C', '4S', 'QS'], card: '2H', take: ['2D', '7C'], glow: ['2H', '2D', '7C'] },
+  { id: 'pic', hand: ['QD', '5H', '8S', 'AC'], table: ['QS', '3H', '6D', 'KH'], card: 'QD', take: ['QS'], glow: ['QD', 'QS'] },
+  { id: 'furti', hand: ['JH', '9D', '4C', 'KC'], table: ['3S', '8H', 'QC', '5D'], card: 'JH', take: ['3S', '8H', '5D'], glow: ['JH'] },
+  { id: 'lay', hand: ['9H', '8S', '10H', '3D'], table: ['QD', 'KH', '4C', '5S'], lay: true, glow: [] },
+  { id: 'ten', hand: ['AC', '9H', 'KD', '5S'], table: ['10D', '3H', '6C', 'QD'], card: 'AC', take: ['10D'], glow: ['AC', '10D'] },
+  { id: 'two', hand: ['9S', '7D', 'KS', 'JC'], table: ['2C', '4H', 'QC', 'KH'], card: '9S', take: ['2C'], glow: ['9S', '2C'] },
+];
+
+function startTutorial() {
+  leaveRoomState();
+  S.rulesOpen = false;
+  S.local = { state: null, level: 'easy', pub: null, botTimer: null, tut: { i: 0, done: false, finished: false, msg: '' } };
+  loadLesson(0);
+  go('#/offline');
+}
+
+function loadLesson(i) {
+  const L = LESSONS[i];
+  const name = S.profile?.nickname || t('log.you');
+  const st = E.newGame({ players: [{ id: LOCAL_ID, name, bot: false }, { id: null, name: 'Bot 2', bot: true }], targetScore: 11, dealer: 1 });
+  st.deal.hands = [L.hand.slice(), ['2S', '3S', '4S', '5S']];
+  st.deal.table = L.table.slice();
+  st.deal.deck = [];
+  st.deal.current = 0;
+  st.deal.log = [];
+  S.local.state = st;
+  Object.assign(S.local.tut, { i, done: false, finished: false, msg: '' });
+  S.sel = { card: null, take: new Set() };
+  S.renderedVersion = 0;
+  syncLocal();
+  render();
+}
+
+function tutAttempt(card, take) {
+  const tut = S.local.tut;
+  const L = LESSONS[tut.i];
+  if (tut.done) return;
+  const ok = L.lay ? take.length === 0 : card === L.card && E.sameSet(take, L.take);
+  if (!ok) { tut.msg = t('tut.wrong'); haptic('error'); render(); return; }
+  tut.done = true; tut.msg = '';
+  try { localPlay(card, take); } catch (e) { toast(errMsg(e), 'err'); }
+}
+
+function tutNext() {
+  const tut = S.local.tut;
+  if (tut.i + 1 < LESSONS.length) loadLesson(tut.i + 1);
+  else { tut.finished = true; render(); }
+}
+
+function coachHtml() {
+  const tut = S.local.tut;
+  const L = LESSONS[tut.i];
+  const last = tut.i + 1 === LESSONS.length;
+  return `<div class="coach">
+    <div class="coach-top"><span class="chip gold">${esc(t('tut.step', { n: tut.i + 1, total: LESSONS.length }))}</span></div>
+    <p>${esc(tut.done ? t('tut.ok') : t(`tut.${L.id}`))}${tut.msg ? ` <span class="warn">${esc(tut.msg)}</span>` : ''}</p>
+    ${tut.done ? `<button class="btn primary small" data-act="tutnext">${esc(last ? t('tut.last') : t('tut.next'))}</button>` : ''}
+  </div>`;
+}
+
+function viewTutDone() {
+  return `<div class="overlay"><div class="sheet" data-stop="1">
+    <h2>${esc(t('tut.doneTitle'))}</h2>
+    <p>${esc(t('tut.doneText'))}</p>
+    <div class="ex" data-ex="10D 2C"></div>
+    <div class="actions-row"><button class="btn primary" data-act="tutplay">${esc(t('tut.play'))}</button><button class="btn" data-act="leave">${esc(t('tut.home'))}</button></div>
+  </div></div>`;
 }
 
 // ---------- binding ----------
 function bind() {
   mountGameCards();
+  fillExamples();
   const deco = document.getElementById('deco');
   if (deco) for (const c of ['AS', '10D', 'JC']) deco.appendChild(cardEl(c));
   for (const el of document.querySelectorAll('.ribbon')) el.textContent = t('game.furti');
@@ -1166,6 +1278,10 @@ function doAction(act, el) {
     case 'home': go('#/'); break;
     case 'lang': setLang(getLang() === 'ka' ? 'en' : 'ka'); if (S.user) supabase.from('profiles').update({ lang: getLang() }).eq('id', S.user.id).then(() => {}); if (isLocal()) { S.local.state.players[0].name = S.profile?.nickname || t('log.you'); syncLocal(); render(); } break;
     case 'rules': S.rulesOpen = true; render(); break;
+    case 'tutorial': startTutorial(); break;
+    case 'tutnext': tutNext(); break;
+    case 'tutplay': startLocal({ players: 2, level: 'easy', target: 11 }); break;
+    case 'theme': nextTheme(); render(); break;
     case 'emotes': S.picker = !S.picker; render(); break;
     case 'emote': sendEmote(el.dataset.id); break;
     case 'emotesoff': try { localStorage.setItem(EMOTES_OFF_KEY, emotesOff() ? '0' : '1'); } catch { /* ignore */ } S.bubbles = {}; S.picker = false; render(); break;
@@ -1376,6 +1492,35 @@ function animateLay(ev, origin, box, mine, handled) {
   setTimeout(done, 1000);
 }
 
+// A short line of big text over the table, and a puff of sparks.
+function flashBanner(text, kind = '') {
+  const felt = app.querySelector('.felt')?.getBoundingClientRect();
+  const el = document.createElement('div');
+  el.className = `banner-fx ${kind}`;
+  el.textContent = text;
+  el.style.left = `${felt ? felt.left + felt.width / 2 : innerWidth / 2}px`;
+  el.style.top = `${felt ? felt.top + felt.height * 0.22 : innerHeight * 0.3}px`;
+  fx.appendChild(el);
+  setTimeout(() => el.remove(), 1900);
+}
+
+function burst(x, y) {
+  if (REDUCED_MOTION) return;
+  for (let i = 0; i < 22; i++) {
+    const sp = document.createElement('span');
+    sp.className = 'spark';
+    sp.textContent = i % 3 === 0 ? '✦' : '●';
+    sp.style.left = `${x}px`; sp.style.top = `${y}px`;
+    sp.style.fontSize = `${8 + Math.random() * 14}px`;
+    fx.appendChild(sp);
+    const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 110;
+    sp.animate(
+      [{ transform: 'translate(-50%, -50%) scale(1)', opacity: 1 }, { transform: `translate(${Math.cos(a) * d - 8}px, ${Math.sin(a) * d - 8}px) scale(.2)`, opacity: 0 }],
+      { duration: 800 + Math.random() * 500, easing: 'cubic-bezier(.1,.8,.3,1)', fill: 'forwards' },
+    ).onfinish = () => sp.remove();
+  }
+}
+
 // A capture: the played card lands on the cards it takes, they light up for a
 // moment, then everything slides to the taker's pile.
 function animateTake(ev, origin, prev, mine) {
@@ -1414,8 +1559,25 @@ function animateTake(ev, origin, prev, mine) {
   played.animate(
     [{ transform: 'scale(.4)', opacity: .6 }, { transform: `translate(${landX - x0}px, ${landY - y0}px) scale(1.04)`, opacity: 1 }],
     { duration: 600, easing: EASE, fill: 'forwards' },
-  ).onfinish = () => { sfx.tick(); setTimeout(sweepOut, 600); };
-  setTimeout(() => all.forEach((t) => t.g.remove()), 2600);
+  ).onfinish = () => {
+    // The two cards worth a point each get a moment of their own.
+    const ids = [ev.card, ...cards];
+    const special = ids.includes('10D') ? 'ten' : ids.includes('2C') ? 'two' : null;
+    let hold = 600;
+    if (special) {
+      hold = 1300;
+      const gem = all.find((x) => x.g.dataset.card === (special === 'ten' ? '10D' : '2C'));
+      if (gem) { gem.g.classList.add('special'); burst(gem.cx, gem.cy); }
+      flashBanner(t(`special.${special}`), 'gold');
+      sfx.special();
+    } else if (ev.sweep) {
+      hold = 1000; burst(gx, gy); flashBanner(t('banner.sweep')); sfx.tick();
+    } else if (E.rankOf(ev.card) === 'J' && cards.length >= 2) {
+      hold = 800; flashBanner(t('banner.furti')); sfx.tick();
+    } else sfx.tick();
+    setTimeout(sweepOut, hold);
+  };
+  setTimeout(() => all.forEach((t) => t.g.remove()), 3600);
 }
 
 boot();
