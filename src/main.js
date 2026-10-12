@@ -49,9 +49,9 @@ const S = {
 };
 
 // ---------- table style ----------
-const THEMES = ['wood', 'linen', 'slate'];
+const THEMES = ['ambani', 'wood', 'linen', 'slate'];
 const THEME_KEY = 'eleven.table';
-function tableTheme() { try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : 'wood'; } catch { return 'wood'; } }
+function tableTheme() { try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : 'ambani'; } catch { return 'wood'; } }
 function nextTheme() { const n = THEMES[(THEMES.indexOf(tableTheme()) + 1) % THEMES.length]; try { localStorage.setItem(THEME_KEY, n); } catch { /* ignore */ } }
 
 // ---------- emotes ----------
@@ -579,6 +579,7 @@ function render() {
   if (showGame()) {
     const g = game();
     S.renderedVersion = g.version; S.renderedDeal = g.dealNo; S.renderedRound = g.deal?.handRound || 0;
+    warmDancer();
     if (!S.timerInterval) S.timerInterval = setInterval(tickTimer, 500);
     tickTimer();
   } else if (S.timerInterval) { clearInterval(S.timerInterval); S.timerInterval = null; }
@@ -990,6 +991,7 @@ function emotePicker() {
   return `<div class="emote-pop" role="dialog" aria-label="${esc(t('emote.title'))}">
     <div class="emote-grid">${EMOTES.map((e) => `<button class="emote" data-act="emote" data-id="${e.id}" ${cool ? 'disabled' : ''}><span class="e">${e.icon}</span><span class="t">${esc(t(`emote.${e.id}`))}</span></button>`).join('')}</div>
     <button class="btn small ghost" data-act="emotesoff">${esc(emotesOff() ? t('emote.on') : t('emote.off'))}</button>
+    <button class="btn small ghost" data-act="dancer">${esc(dancerOff() ? t('dancer.on') : t('dancer.off'))}</button>
   </div>`;
 }
 
@@ -1282,6 +1284,7 @@ function doAction(act, el) {
     case 'tutnext': tutNext(); break;
     case 'tutplay': startLocal({ players: 2, level: 'easy', target: 11 }); break;
     case 'theme': nextTheme(); render(); break;
+    case 'dancer': try { localStorage.setItem('eleven.dancer', dancerOff() ? '1' : '0'); } catch { /* ignore */ } S.picker = false; render(); break;
     case 'emotes': S.picker = !S.picker; render(); break;
     case 'emote': sendEmote(el.dataset.id); break;
     case 'emotesoff': try { localStorage.setItem(EMOTES_OFF_KEY, emotesOff() ? '0' : '1'); } catch { /* ignore */ } S.bubbles = {}; S.picker = false; render(); break;
@@ -1492,6 +1495,17 @@ function animateLay(ev, origin, box, mine, handled) {
   setTimeout(done, 1000);
 }
 
+// The dancing man: three.js is fetched the first time he is needed (and warmed up
+// while the table is on screen), so the main page stays light.
+function dancerOff() { try { return localStorage.getItem('eleven.dancer') === '0'; } catch { return false; } }
+function warmDancer() { if (!S.dancerWarm && !dancerOff()) { S.dancerWarm = true; (window.requestIdleCallback || setTimeout)(() => import('./dancer.js').catch(() => {})); } }
+function startDancer() {
+  if (dancerOff() || REDUCED_MOTION) return;
+  const felt = app.querySelector('.felt')?.getBoundingClientRect();
+  if (!felt) return;
+  import('./dancer.js').then((m) => m.playDancer(felt, () => sfx.folk(m.DANCER_SECONDS))).catch(() => {});
+}
+
 // A short line of big text over the table, and a puff of sparks.
 function flashBanner(text, kind = '') {
   const felt = app.querySelector('.felt')?.getBoundingClientRect();
@@ -1570,6 +1584,7 @@ function animateTake(ev, origin, prev, mine) {
       if (gem) { gem.g.classList.add('special'); burst(gem.cx, gem.cy); }
       flashBanner(t(`special.${special}`), 'gold');
       sfx.special();
+      startDancer();
     } else if (ev.sweep) {
       hold = 1000; burst(gx, gy); flashBanner(t('banner.sweep')); sfx.tick();
     } else if (E.rankOf(ev.card) === 'J' && cards.length >= 2) {

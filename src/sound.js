@@ -145,6 +145,70 @@ export const sfx = {
     const t = c.currentTime;
     (won ? [C5, E5, G5, C6, E6] : [A4, G4, F4]).forEach((f, i) => tone(c, t + i * 0.16, f, 0.5, 0.055, 'triangle'));
   },
+  // A short dance tune in the spirit of Georgian folk music, written from scratch:
+  // a two-voice drone under the plucked lead (panduri-like), a doli drum in 6/8.
+  // Returns a function that stops it early.
+  folk(seconds = 4) {
+    const c = ac(); if (!c) return () => {};
+    const t0 = c.currentTime + 0.03;
+    const eighth = 0.165;
+    const bus = c.createGain();
+    bus.gain.setValueAtTime(0.0001, t0);
+    bus.gain.linearRampToValueAtTime(1, t0 + 0.12);
+    bus.gain.setValueAtTime(1, t0 + seconds - 0.4);
+    bus.gain.linearRampToValueAtTime(0.0001, t0 + seconds);
+    bus.connect(master);
+    const stops = [];
+
+    const pluck = (t, f, dur = 0.26, peak = 0.11) => {
+      for (const detune of [-4, 5]) {
+        const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = detune;
+        const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 4;
+        lp.frequency.setValueAtTime(f * 7, t); lp.frequency.exponentialRampToValueAtTime(f * 1.6, t + dur);
+        const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak / 2, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(lp); lp.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + 0.05); stops.push(o);
+      }
+    };
+    const drone = (f, peak) => {
+      const o = c.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+      const lfo = c.createOscillator(); lfo.frequency.value = 5.2;
+      const lg = c.createGain(); lg.gain.value = f * 0.006; lfo.connect(lg); lg.connect(o.frequency);
+      const g = c.createGain(); g.gain.value = peak;
+      o.connect(g); g.connect(bus); o.start(t0); lfo.start(t0); o.stop(t0 + seconds + 0.1); lfo.stop(t0 + seconds + 0.1); stops.push(o, lfo);
+    };
+    const doli = (t, kind) => {
+      if (kind === 'dum') {
+        const o = c.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(115, t); o.frequency.exponentialRampToValueAtTime(52, t + 0.13);
+        const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.3, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+        o.connect(g); g.connect(bus); o.start(t); o.stop(t + 0.22); stops.push(o);
+      } else {
+        const n = noise(c); const hp = c.createBiquadFilter(); hp.type = 'bandpass'; hp.frequency.value = 3200; hp.Q.value = 1.2;
+        const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.14, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+        n.connect(hp); hp.connect(g); g.connect(bus); n.start(t); n.stop(t + 0.1); stops.push(n);
+      }
+    };
+
+    // D dorian-ish: D4 E4 F4 G4 A4 Bb4 C5 D5
+    const D4 = 293.66, E4 = 329.63, F4 = 349.23, G4 = 392, A4 = 440, C5 = 523.25, D5 = 587.33;
+    const tune = [
+      A4, A4, G4, A4, C5, A4,   G4, F4, E4, F4, G4, D4,
+      A4, C5, D5, C5, A4, G4,   F4, E4, F4, E4, D4, D4,
+    ];
+    const beats = Math.floor(seconds / eighth);
+    for (let i = 0; i < beats; i++) {
+      const t = t0 + i * eighth;
+      pluck(t, tune[i % tune.length], i % 6 === 0 ? 0.34 : 0.22, i % 6 === 0 ? 0.13 : 0.1);
+      const pos = i % 6; // doli: DUM . tek DUM tek .
+      if (pos === 0 || pos === 3) doli(t, 'dum'); else if (pos === 2 || pos === 4) doli(t, 'tek');
+    }
+    drone(146.83, 0.035); drone(220, 0.022);
+
+    return () => {
+      const now = c.currentTime;
+      bus.gain.cancelScheduledValues(now); bus.gain.setValueAtTime(bus.gain.value, now); bus.gain.linearRampToValueAtTime(0.0001, now + 0.15);
+    };
+  },
   special() {
     const c = ac(); if (!c) return;
     const t = c.currentTime;
