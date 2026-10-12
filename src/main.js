@@ -2,6 +2,7 @@ import './styles.css';
 import { supabase, api, accountApi, ApiError } from './supabase.js';
 import { t, getLang, setLang, onLangChange, COUNTRIES } from './i18n.js';
 import { cardEl, cardLabel } from './cards.js';
+import { STICKERS, stickerHtml, mySticker, setMySticker, stickersOff, setStickersOff, botSticker } from './stickers.js';
 import { sfx, unlock, soundEnabled, setSound } from './sound.js';
 import { inTelegram, prepareTelegram, telegramSignIn, startParam, roomLinkFor, shareInTelegram, haptic, showBackButton, hideBackButton, telegramLang } from './telegram.js';
 import * as E from '../supabase/functions/game/engine.js';
@@ -45,6 +46,7 @@ const S = {
   emoteCool: 0,       // time before which we may not send another emote
   picker: false,
   spam: {},           // seat -> recent emote timestamps
+  stickers: {},       // player id -> chosen furti sticker
   autoMuted: new Set(),
 };
 
@@ -320,6 +322,14 @@ async function loadGame(gameId) {
   ]);
   if (g) acceptGameRow(g);
   if (h) acceptHandRow(h);
+  if (g) loadStickers(g.public.players);
+}
+
+async function loadStickers(players) {
+  const ids = (players || []).filter((p) => p.id && !p.bot).map((p) => p.id);
+  if (!ids.length) return;
+  const { data } = await supabase.from('profiles').select('id, sticker').in('id', ids);
+  for (const row of data || []) if (row.sticker) S.stickers[row.id] = row.sticker;
 }
 
 function acceptGameRow(row) {
@@ -431,7 +441,7 @@ function applyBubbles() {
 
 // Offline: the computer reacts now and then, so the table feels alive.
 function botReact(kind, byBot = false) {
-  if (!S.local) return;
+  if (!S.local || S.local.tut) return;
   const bots = S.local.state.players.filter((p) => p.bot).map((p) => p.seat);
   if (!bots.length) return;
   const seat = bots[Math.floor(Math.random() * bots.length)];
@@ -980,7 +990,7 @@ function viewGame() {
       <div class="status-line ${myTurn ? 'turn' : ''}">${esc(myTurn && !S.sel.card ? t('game.yourTurn') + ' · ' + status : status)}${timed ? ` <span class="timer"></span>` : ''}</div>
       <div class="buttons">${sumHtml}${takeBtn}${layBtn}</div>
     </div>
-    ${S.picker ? emotePicker() : ''}
+    ${S.picker === 'stickers' ? stickerPicker() : S.picker ? emotePicker() : ''}
     ${S.local?.tut?.finished ? viewTutDone() : ''}
     ${overlay}
   </div>`;
@@ -991,6 +1001,7 @@ function emotePicker() {
   return `<div class="emote-pop" role="dialog" aria-label="${esc(t('emote.title'))}">
     <div class="emote-grid">${EMOTES.map((e) => `<button class="emote" data-act="emote" data-id="${e.id}" ${cool ? 'disabled' : ''}><span class="e">${e.icon}</span><span class="t">${esc(t(`emote.${e.id}`))}</span></button>`).join('')}</div>
     <button class="btn small ghost" data-act="emotesoff">${esc(emotesOff() ? t('emote.on') : t('emote.off'))}</button>
+    <button class="btn small ghost" data-act="stickerpicker">🎭 ${esc(t('sticker.title'))}</button>
     <button class="btn small ghost" data-act="dancer">${esc(dancerOff() ? t('dancer.on') : t('dancer.off'))}</button>
   </div>`;
 }
@@ -1285,7 +1296,14 @@ function doAction(act, el) {
     case 'tutplay': startLocal({ players: 2, level: 'easy', target: 11 }); break;
     case 'theme': nextTheme(); render(); break;
     case 'dancer': try { localStorage.setItem('eleven.dancer', dancerOff() ? '1' : '0'); } catch { /* ignore */ } S.picker = false; render(); break;
-    case 'emotes': S.picker = !S.picker; render(); break;
+    case 'emotes': S.picker = S.picker === true ? false : true; render(); break;
+    case 'stickerpicker': S.picker = 'stickers'; render(); break;
+    case 'pickstk': {
+      setMySticker(el.dataset.id); S.picker = false; render(); showSticker(el.dataset.id);
+      if (S.user && !isLocal()) supabase.from('profiles').update({ sticker: el.dataset.id }).eq('id', S.user.id).then(() => {});
+      break;
+    }
+    case 'stickersoff': setStickersOff(!stickersOff()); S.picker = false; render(); break;
     case 'emote': sendEmote(el.dataset.id); break;
     case 'emotesoff': try { localStorage.setItem(EMOTES_OFF_KEY, emotesOff() ? '0' : '1'); } catch { /* ignore */ } S.bubbles = {}; S.picker = false; render(); break;
     case 'mute': {
@@ -1495,6 +1513,35 @@ function animateLay(ev, origin, box, mine, handled) {
   setTimeout(done, 1000);
 }
 
+// ---------- furti stickers ----------
+function stickerFor(seat) {
+  const g = game();
+  const p = g?.players[seat];
+  if (!p || p.bot) return botSticker(seat);
+  if (seat === mySeat()) return mySticker();
+  return S.stickers[p.id] || botSticker(seat);
+}
+
+function showSticker(id) {
+  const felt = app.querySelector('.felt')?.getBoundingClientRect();
+  const el = document.createElement('div');
+  el.className = 'sticker-fx';
+  el.innerHTML = stickerHtml(id, t(`stk.${id}`), Math.min(190, (felt?.width || 400) * 0.45));
+  el.style.left = `${felt ? felt.left + felt.width / 2 : innerWidth / 2}px`;
+  el.style.top = `${felt ? felt.top + felt.height * 0.42 : innerHeight * 0.4}px`;
+  fx.appendChild(el);
+  setTimeout(() => el.remove(), 2100);
+}
+
+function stickerPicker() {
+  const cur = mySticker();
+  return `<div class="emote-pop sticker-pop" role="dialog" aria-label="${esc(t('sticker.title'))}">
+    <p class="muted">${esc(t('sticker.hint'))}</p>
+    <div class="sticker-grid">${STICKERS.map((s) => `<button class="stk ${s.id === cur ? 'on' : ''}" data-act="pickstk" data-id="${s.id}" aria-label="${esc(t(`stk.${s.id}`))}">${stickerHtml(s.id, t(`stk.${s.id}`), 64)}</button>`).join('')}</div>
+    <div class="row-btns"><button class="btn small ghost" data-act="stickersoff">${esc(stickersOff() ? t('sticker.on') : t('sticker.off'))}</button><button class="btn small ghost" data-act="emotes">${esc(t('nav.back'))}</button></div>
+  </div>`;
+}
+
 // The dancing man: three.js is fetched the first time he is needed (and warmed up
 // while the table is on screen), so the main page stays light.
 function dancerOff() { try { return localStorage.getItem('eleven.dancer') === '0'; } catch { return false; } }
@@ -1588,7 +1635,9 @@ function animateTake(ev, origin, prev, mine) {
     } else if (ev.sweep) {
       hold = 1000; burst(gx, gy); flashBanner(t('banner.sweep')); sfx.tick();
     } else if (E.rankOf(ev.card) === 'J' && cards.length >= 2) {
-      hold = 800; flashBanner(t('banner.furti')); sfx.tick();
+      sfx.pop();
+      if (stickersOff()) { hold = 800; flashBanner(t('banner.furti')); }
+      else { hold = 1500; showSticker(stickerFor(ev.seat)); }
     } else sfx.tick();
     setTimeout(sweepOut, hold);
   };
