@@ -337,6 +337,48 @@ export function nextDeal(state, rand) {
   return startDeal(state, rand);
 }
 
+// ---------- daily deal ----------
+// One shuffle for everybody each (UTC) day, played against the hard computer.
+// Everything is deterministic (seeded shuffle, bot without randomness), so the
+// server can replay the submitted moves and trust the result.
+
+export function dailySeed(day) {
+  let h = 2166136261;
+  for (const ch of String(day)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+export function newDaily(day, { id = null, name = 'You' } = {}) {
+  return newGame({
+    players: [{ id, name, bot: false }, { id: null, name: 'Bot', bot: true }],
+    targetScore: 999, dealer: 1, rand: seededRandom(dailySeed(day)),
+  });
+}
+
+// The computer's replies until it is the player's turn again or the deal ends.
+export function dailyBotTurns(state) {
+  while (state.phase === 'deal' && state.deal.current === 1) {
+    const m = botMove(state, 1, 'hard');
+    play(state, 1, m.card, m.take);
+  }
+}
+
+// Replays the player's moves. Returns { ok, points, cards, rival } for a finished deal.
+export function replayDaily(day, moves) {
+  try {
+    const st = newDaily(day, { id: 'p', name: 'p' });
+    dailyBotTurns(st);
+    for (const mv of moves) {
+      if (st.phase !== 'deal' || st.deal.current !== 0) return { ok: false };
+      play(st, 0, mv.card, mv.take || []);
+      dailyBotTurns(st);
+    }
+    if (st.phase === 'deal') return { ok: false };
+    const r = st.dealResults[0];
+    return { ok: true, points: r.points[0], cards: r.cards[0], rival: r.cards[1] };
+  } catch { return { ok: false }; }
+}
+
 // ---------- views ----------
 
 // Everything a client may see: no deck order, no other hands, no pile contents.

@@ -160,3 +160,32 @@ test('the table never starts with a jack and no card is lost', () => {
     if (s.phase === 'deal_over') { E.nextDeal(s, rand); assert.ok(s.deal.table.every((c) => E.rankOf(c) !== 'J')); }
   }
 });
+
+test('daily deal is deterministic and replayable', () => {
+  const day = '2026-10-13';
+  const a = E.newDaily(day, { id: 'p' }), b = E.newDaily(day, { id: 'p' });
+  assert.deepEqual(a.deal.table, b.deal.table);
+  assert.deepEqual(a.deal.hands, b.deal.hands);
+  assert.notDeepEqual(E.newDaily('2026-10-14').deal.hands, a.deal.hands);
+  assert.ok(a.deal.table.every((c) => E.rankOf(c) !== 'J'));
+
+  // play a whole daily with the normal bot in the player's seat, record the moves, replay them
+  for (const lvl of ['easy', 'normal', 'hard']) {
+    const st = E.newDaily(day, { id: 'p' });
+    E.dailyBotTurns(st);
+    const moves = [];
+    const rand = E.seededRandom(5);
+    while (st.phase === 'deal') {
+      const m = E.botMove(st, 0, lvl, rand);
+      moves.push({ card: m.card, take: m.take });
+      E.play(st, 0, m.card, m.take);
+      E.dailyBotTurns(st);
+    }
+    const res = E.replayDaily(day, moves);
+    assert.ok(res.ok, lvl);
+    assert.equal(res.points, st.dealResults[0].points[0]);
+    assert.equal(res.cards, st.dealResults[0].cards[0]);
+    assert.equal(E.replayDaily(day, moves.slice(0, -1)).ok, false, 'incomplete games are rejected');
+  }
+  assert.equal(E.replayDaily(day, [{ card: 'XX', take: [] }]).ok, false);
+});

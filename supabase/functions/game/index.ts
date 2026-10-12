@@ -61,6 +61,8 @@ async function handle(uid: string, body: any) {
     case 'auto_play': return autoPlay(uid, body);
     case 'next_deal': return nextDeal(uid, body);
     case 'back_to_lobby': return backToLobby(uid, body);
+    case 'daily_get': return dailyGet(uid);
+    case 'daily_submit': return dailySubmit(uid, body);
     default: throw new ApiError('bad_action', `Unknown action: ${body.action}`);
   }
 }
@@ -263,7 +265,8 @@ async function updateRoom(uid: string, body: any) {
 
 async function startGame(uid: string, body: any) {
   const { room, seats } = await loadRoom(body.room_id);
-  requireHost(room, uid);
+  // after a finished game any player at the table may start the rematch
+  if (!(room.status === 'finished' && seats.some((p) => p.user_id === uid))) requireHost(room, uid);
   if (room.status === 'playing') throw new ApiError('room_started', 'The game is already running');
 
   // Empty seats are filled by bots so the table is always full.
@@ -323,6 +326,8 @@ async function writeHands(gameId: string, state: any) {
 // Optimistic lock on the secret state's version: whoever updates first wins,
 // the other request sees a conflict and the client simply re-reads.
 async function persist(gameId: string, state: any, expectedVersion: number) {
+  const finishing = state.phase === 'game_over' && !state.statsDone;
+  if (finishing) state.statsDone = true; // the version lock below lets exactly one writer record the result
   const { data, error } = await admin.from('game_secrets')
     .update({ state, updated_at: new Date().toISOString() })
     .eq('game_id', gameId).eq('state->>version', String(expectedVersion))
@@ -340,6 +345,46 @@ async function persist(gameId: string, state: any, expectedVersion: number) {
     const { data: g } = await admin.from('games').select('room_id').eq('id', gameId).maybeSingle();
     if (g) await touchRoom(g.room_id, { status: 'finished' });
   }
+  if (finishing) await recordStats(state).catch((e) => console.error('stats', e));
+}
+
+async function recordStats(state: any) {
+  for (const p of state.players) {
+    if (p.bot || !p.id) continue;
+    const won = state.winner === p.seat;
+    const { data: cur } = await admin.from('player_stats').select('*').eq('user_id', p.id).maybeSingle();
+    const streak = won ? (cur?.streak ?? 0) + 1 : 0;
+    await admin.from('player_stats').upsert({
+      user_id: p.id, games: (cur?.games ?? 0) + 1, wins: (cur?.wins ?? 0) + (won ? 1 : 0),
+      streak, best_streak: Math.max(cur?.best_streak ?? 0, streak), updated_at: new Date().toISOString(),
+    });
+  }
+}
+
+// ---------- daily deal ----------
+
+function utcDay(offsetDays = 0) { return new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10); }
+
+async function dailyGet(uid: string) {
+  const day = utcDay();
+  const { data: top } = await admin.from('daily_results')
+    .select('user_id, nickname, points, cards, margin').eq('day', day)
+    .order('points', { ascending: false }).order('cards', { ascending: false }).order('margin', { ascending: false }).order('created_at', { ascending: true }).limit(20);
+  const { data: mine } = await admin.from('daily_results').select('points, cards, margin').eq('day', day).eq('user_id', uid).maybeSingle();
+  return { day, top: top ?? [], mine: mine ?? null };
+}
+
+async function dailySubmit(uid: string, body: any) {
+  const day = String(body.day ?? '');
+  if (day !== utcDay() && day !== utcDay(-1)) throw new ApiError('bad_day', 'That daily deal is no longer open');
+  const moves = Array.isArray(body.moves) ? body.moves.slice(0, 40).map((m: any) => ({ card: String(m.card), take: Array.isArray(m.take) ? m.take.map(String) : [] })) : [];
+  const res = E.replayDaily(day, moves);
+  if (!res.ok) throw new ApiError('bad_moves', 'That game does not replay');
+  const nickname = await profileName(uid);
+  const row = { day, user_id: uid, nickname, points: res.points, cards: res.cards, margin: res.cards - res.rival, moves };
+  const { error } = await admin.from('daily_results').insert(row);
+  if (error && error.code !== '23505') throw error; // the first result of the day counts
+  return { ...(await dailyGet(uid)), result: { points: res.points, cards: res.cards, margin: res.cards - res.rival } };
 }
 
 function seatOf(state: any, uid: string) {
