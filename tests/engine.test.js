@@ -139,3 +139,24 @@ test('turn timer', () => {
   assert.equal(s.players[1].bot, false);
   assert.equal(E.isComputerTurn(s), s.deal.current === 0);
 });
+
+test('the table never starts with a jack and no card is lost', () => {
+  for (let seed = 1; seed <= 400; seed++) {
+    const n = 2 + (seed % 3);
+    const players = [P2, P3, P4][n - 2];
+    const s = E.newGame({ players, rand: E.seededRandom(seed) });
+    const d = s.deal;
+    assert.equal(d.table.length, 4);
+    assert.ok(d.table.every((c) => E.rankOf(c) !== 'J'), `seed ${seed}: jack on the table ${d.table}`);
+    const all = [...d.deck, ...d.table, ...d.hands.flat()];
+    assert.equal(all.length, 52);
+    assert.equal(new Set(all).size, 52);
+  }
+  // later deals follow the same rule
+  const rand = E.seededRandom(99);
+  const s = E.newGame({ players: P2, rand });
+  for (let i = 0; i < 30 && s.phase !== 'game_over'; i++) {
+    while (s.phase === 'deal') { const m = E.botMove(s, s.deal.current, 'normal', rand); E.play(s, s.deal.current, m.card, m.take); }
+    if (s.phase === 'deal_over') { E.nextDeal(s, rand); assert.ok(s.deal.table.every((c) => E.rankOf(c) !== 'J')); }
+  }
+});

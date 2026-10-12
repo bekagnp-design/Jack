@@ -138,7 +138,7 @@ const STRINGS = {
     'score.twoCPt': '2♣ +1',
 
     'rules.title': 'How to play',
-    'rules.1': '52 cards, two to four players, everyone for themselves. The dealer gives four cards to each player and turns four face up on the table.',
+    'rules.1': '52 cards, two to four players, everyone for themselves. The dealer gives four cards to each player and turns four face up on the table. A jack never starts on the table: if one turns up, it goes back into the deck.',
     'rules.2': 'On your turn play one card. A number card (ace counts 1) takes a group of table cards whose sum with it is exactly 11, for example A + 10 or 2 + 2 + 7. One group per turn.',
     'rules.3': 'A queen takes a queen, a king takes a king.',
     'rules.4': 'The jack is the furti: it takes everything on the table except queens and kings. If there is nothing to take it stays on the table, and a later jack takes it.',
@@ -297,7 +297,7 @@ const STRINGS = {
     'score.twoCPt': '2♣ +1',
 
     'rules.title': 'როგორ თამაშობენ',
-    'rules.1': '52 კარტი, ორიდან ოთხამდე მოთამაშე, თითოეული თავისთვის. მიმწოდებელი ყველას 4-4 კარტს ურიგებს და 4 კარტს მაგიდაზე ღიად შლის.',
+    'rules.1': '52 კარტი, ორიდან ოთხამდე მოთამაშე, თითოეული თავისთვის. მიმწოდებელი ყველას 4-4 კარტს ურიგებს და 4 კარტს მაგიდაზე ღიად შლის. ვალეტი მაგიდაზე არასდროს იწყება: თუ გამოვიდა, დასტაში ბრუნდება.',
     'rules.2': 'შენს სვლაზე ერთ კარტს ჩამოდიხარ. რიცხვით კარტს (ტუზი = 1) მიჰყავს მაგიდის კარტების ჯგუფი, რომელთა ჯამი მასთან ერთად ზუსტად 11-ია, მაგალითად A + 10 ან 2 + 2 + 7. ერთ სვლაზე ერთი ჯგუფი.',
     'rules.3': 'დამას დამა მიჰყავს, კაროლს კაროლი.',
     'rules.4': 'ვალეტი არის ფურთი: მიჰყავს ყველაფერი, დამებისა და კაროლების გარდა. თუ წასაყვანი არაფერია, მაგიდაზე რჩება და შემდეგ სხვა ვალეტს მიჰყავს.',

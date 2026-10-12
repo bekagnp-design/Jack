@@ -6,8 +6,9 @@
 // Rules (as agreed with the user):
 //  - 52 cards, 2–4 players, each for themselves. Dealer rotates; the player to
 //    the dealer's left plays first.
-//  - 4 cards face up on the table, 4 cards to each player. When every hand is
-//    empty, 4 more each from the deck (the table is not replenished).
+//  - 4 cards face up on the table (never a jack: it goes back into the deck),
+//    4 cards to each player. When every hand is empty, 4 more each from the
+//    deck (the table is not replenished).
 //  - A number card (A=1 … 10) may take a group of number cards from the table
 //    whose sum together with it is exactly 11. One group per play.
 //  - Q takes one Q, K takes one K.
@@ -157,7 +158,15 @@ export function startDeal(state, rand) {
   if (state.dealNo > 0) state.dealer = (state.dealer + 1) % state.n;
   state.dealNo += 1;
   const deck = shuffle(fullDeck(), rand);
-  const table = deck.splice(0, TABLE_SIZE);
+  // The four cards turned up on the table are never jacks: a jack that turns up
+  // goes back into the deck at a random place and another card is turned instead.
+  const r = rand || cryptoRandom;
+  const table = [];
+  while (table.length < TABLE_SIZE) {
+    const c = deck.shift();
+    if (rankOf(c) === 'J') deck.splice(Math.max(1, Math.floor(r() * (deck.length + 1))), 0, c);
+    else table.push(c);
+  }
   const deal = {
     deck,
     table,
