@@ -188,21 +188,21 @@ form { display: grid; gap: 12px; }
 .card::after { content: ""; position: absolute; inset: 4px; border: 1px solid rgba(27, 26, 23, .14); border-radius: 5px; pointer-events: none; }
 .card.red { color: var(--red); }
 .idx { position: absolute; display: flex; flex-direction: column; align-items: center; line-height: 1; font-weight: 700; }
-.idx.tl { top: 5px; left: 5px; }
-.idx.br { bottom: 5px; right: 5px; transform: rotate(180deg); }
-.idx .r { font-size: 17px; }
-.idx .s { font-size: 13px; margin-top: 1px; }
+.idx.tl { top: calc(var(--card-w) * .045); left: calc(var(--card-w) * .04); }
+.idx.br { bottom: calc(var(--card-w) * .045); right: calc(var(--card-w) * .04); transform: rotate(180deg); }
+.idx .r { font-size: calc(var(--card-w) * .2); letter-spacing: -.04em; }
+.idx .s { font-size: calc(var(--card-w) * .16); margin-top: 1px; }
 .pips { position: absolute; inset: 0; }
-.pip { position: absolute; transform: translate(-50%, -50%); font-size: 17px; line-height: 1; }
+.pip { position: absolute; transform: translate(-50%, -50%); font-size: calc(var(--card-w) * .17); line-height: 1; }
 .pip.flip { transform: translate(-50%, -50%) rotate(180deg); }
-.pips.ace .pip { font-size: 40px; }
+.pips.ace .pip { font-size: calc(var(--card-w) * .46); }
 .court {
-  position: absolute; inset: 15px 13px; border: 1.5px solid var(--brass-2); border-radius: 4px;
+  position: absolute; inset: calc(var(--card-h) * .12) calc(var(--card-w) * .25); border: 1.5px solid var(--brass-2); border-radius: 4px;
   display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 3px 0;
   background: linear-gradient(160deg, rgba(212, 176, 106, .18), rgba(212, 176, 106, .02));
 }
-.court-r { font-size: 34px; font-weight: 600; line-height: 1; }
-.court-s { font-size: 13px; line-height: 1; }
+.court-r { font-size: calc(var(--card-w) * .42); font-weight: 600; line-height: 1; }
+.court-s { font-size: calc(var(--card-w) * .16); line-height: 1; }
 .court-s.flip { transform: rotate(180deg); }
 .ribbon {
   position: absolute; left: -5px; bottom: 24px; background: var(--brass); color: #2a1d0c; font-family: var(--font-body);
@@ -336,8 +336,6 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 }
 @media (min-width: 900px) and (min-height: 760px) {
   :root { --card-w: 82px; --card-h: 118px; }
-  .idx .r { font-size: 19px; } .idx .s { font-size: 14px; } .pip { font-size: 19px; } .pips.ace .pip { font-size: 46px; }
-  .court-r { font-size: 38px; }
   .table-cards { gap: 12px; }
   .hand { gap: 10px; }
 }
@@ -351,8 +349,6 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
   .game-top .r { flex-wrap: nowrap; }
   .game-top .r .btn { padding: 5px 9px; }
   :root { --card-w: 58px; --card-h: 84px; }
-  .idx .r { font-size: 14px; } .idx .s { font-size: 11px; } .pip { font-size: 14px; } .pips.ace .pip { font-size: 32px; }
-  .court-r { font-size: 26px; } .court { inset: 13px 10px; }
   .ribbon { font-size: 7px; bottom: 18px; }
   .felt { left: 6px; right: 6px; top: 96px; }
   .felt.n4 { left: 56px; right: 56px; }

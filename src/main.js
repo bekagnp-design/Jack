@@ -110,6 +110,9 @@ function localPlay(card, take) {
 
 function scheduleLocalBots() {
   if (!S.local || S.local.botTimer || !E.isComputerTurn(S.local.state)) return;
+  // Right after a deal the player first needs to see the table and their hand.
+  const log = S.local.state.deal.log;
+  const afterDeal = log.length && log[log.length - 1].type === 'deal';
   S.local.botTimer = setTimeout(() => {
     if (!S.local) return;
     S.local.botTimer = null;
@@ -120,7 +123,7 @@ function scheduleLocalBots() {
     E.play(st, seat, m.card, m.take);
     syncLocal(); saveLocal(); render();
     scheduleLocalBots();
-  }, 950);
+  }, afterDeal ? 3200 : 950);
 }
 
 function localNextDeal() {

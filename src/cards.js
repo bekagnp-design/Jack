@@ -47,7 +47,7 @@ export function cardEl(card, { back = false, interactive = false } = {}) {
     for (const [c, row] of PIPS[r]) {
       const p = document.createElement('span');
       p.className = 'pip' + (row > 3 ? ' flip' : '');
-      p.style.left = `${[18, 50, 82][c]}%`;
+      p.style.left = `${[30, 50, 70][c]}%`;
       p.style.top = `${12 + (row / 6) * 76}%`;
       p.textContent = s;
       pips.appendChild(p);
