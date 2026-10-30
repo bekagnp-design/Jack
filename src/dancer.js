@@ -1,282 +1,223 @@
-// The little dancer: a 3D man in a chokha who hops onto the table, dances for a
-// few seconds and hops off again. Built from primitives with three.js, which is
-// only downloaded the first time he is needed.
+// The little dancer who comes out when somebody takes a 10♦ or 2♣ (and a furti
+// that takes a lot). A hand-drawn SVG man in a chokha, built from parts that are
+// posed every frame: hop in, gallop and twirl, drop to one knee and clap, hop out.
 
-let three = null;
-let rig = null; // { renderer, scene, camera, canvas, parts }
-const DURATION = 4.0; // seconds, enter + dance + exit
+const DURATION = 4.0;
+const INK = '#1b1a17';
+const CHOKHA = '#2c2326';
+const CHOKHA_LIGHT = '#43363a';
+const GOLD = '#d9a93f';
+const CREAM = '#f3e6c6';
+const SKIN = '#f3c9a0';
+const RED = '#a4263a';
 
-const clamp01 = (x) => Math.min(1, Math.max(0, x));
-const lerp = (a, b, t) => a + (b - a) * t;
-const easeOut = (t) => 1 - (1 - t) ** 3;
-const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+const sw = `stroke="${INK}" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"`;
+const sw2 = `stroke="${INK}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"`;
 
-async function load() {
-  if (!three) three = await import('three');
-  return three;
+function gazyrs(x0, dir) {
+  let s = '';
+  for (let i = 0; i < 6; i++) {
+    const x = x0 + dir * i * 6.4;
+    s += `<rect x="${x - 2.6}" y="132" width="5.2" height="27" rx="2.6" fill="${CREAM}" ${sw2}/><rect x="${x - 2.6}" y="132" width="5.2" height="6" rx="2" fill="${GOLD}" ${sw2}/>`;
+  }
+  return s;
 }
 
-function build(THREE) {
-  const mat = (color, rough = 0.75, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0.0, ...extra });
-  const M = {
-    chokha: mat(0x3b1c24), chokhaDark: mat(0x241218), trouser: mat(0x1b1b20), boot: mat(0x0f0f12, 0.5),
-    skin: mat(0xe8b48c, 0.7), cheek: mat(0xe98a7a, 0.8), hair: mat(0x15110f, 0.9), fur: mat(0x16130f, 1),
-    cream: mat(0xf1e8d2, 0.6), gold: mat(0xd9a93e, 0.35, { metalness: 0.6 }), silver: mat(0xcfd3d8, 0.3, { metalness: 0.7 }),
-    red: mat(0x9b1c1c), white: mat(0xffffff, 0.4), eye: mat(0x14110f, 0.3),
+function arm(side) {
+  // side: 1 = left of the screen. Drawn hanging down from the shoulder at (0,0).
+  return `
+    <g class="upper">
+      <rect x="-9" y="-6" width="18" height="44" rx="9" fill="${CHOKHA}" ${sw}/>
+      <g class="fore" transform="translate(0 34)">
+        <rect x="-8" y="-2" width="16" height="36" rx="8" fill="${CHOKHA}" ${sw}/>
+        <rect x="-9" y="24" width="18" height="9" rx="3" fill="${GOLD}" ${sw2}/>
+        <circle cx="0" cy="42" r="10" fill="${SKIN}" ${sw}/>
+        <path d="M-3 44 q3 4 6 0" fill="none" stroke="${INK}" stroke-width="1.8" stroke-linecap="round"/>
+      </g>
+    </g>`;
+}
+
+function boot() {
+  return `
+    <path d="M-13 0 L13 0 L12 24 C22 26 28 32 28 38 L-14 38 C-14 30 -14 14 -13 0 Z" fill="#17120f" ${sw}/>
+    <path d="M-12 30 L26 30" stroke="#5b3a24" stroke-width="3" stroke-linecap="round"/>`;
+}
+
+function markup() {
+  return `
+<svg class="dancer-svg" viewBox="0 0 240 350" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <ellipse id="dn-shadow" cx="120" cy="338" rx="62" ry="9" fill="rgba(0,0,0,.28)"/>
+  <g id="dn-root">
+    <g id="dn-legs">
+      <g id="dn-legL" transform="translate(100 296)">${boot()}</g>
+      <g id="dn-legR" transform="translate(140 296)">${boot()}</g>
+    </g>
+    <g id="dn-skirt">
+      <path d="M94 186 L146 186 C170 230 202 268 208 306 C172 320 68 320 32 306 C38 268 70 230 94 186 Z" fill="${CHOKHA}" ${sw}/>
+      <path d="M104 196 C96 240 84 280 70 312 M120 196 L120 316 M136 196 C144 240 156 280 170 312" fill="none" stroke="${CHOKHA_LIGHT}" stroke-width="3.5" stroke-linecap="round"/>
+      <path d="M33 298 C70 312 170 312 207 298 L208 306 C172 320 68 320 32 306 Z" fill="${GOLD}" ${sw2}/>
+      <path d="M36 288 C72 302 168 302 204 288" fill="none" stroke="${RED}" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <g id="dn-torsoWrap">
+      <g id="dn-torso">
+        <path d="M86 126 C86 114 100 108 120 108 C140 108 154 114 154 126 L148 194 L92 194 Z" fill="${CHOKHA}" ${sw}/>
+        <path d="M106 110 L120 140 L134 110" fill="none" stroke="${GOLD}" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+        ${gazyrs(98, 1)}${gazyrs(142, -1)}
+        <rect x="88" y="184" width="64" height="12" rx="4" fill="${GOLD}" ${sw2}/>
+        <circle cx="120" cy="190" r="6.5" fill="${RED}" ${sw2}/>
+        <g transform="translate(134 196) rotate(-8)"><rect x="-4" y="0" width="8" height="14" rx="3" fill="${GOLD}" ${sw2}/><path d="M-3 14 L3 14 L2 52 L0 58 L-2 52 Z" fill="#dfe5ea" ${sw2}/></g>
+      </g>
+      <g id="dn-armL" transform="translate(94 124)">${arm(1)}</g>
+      <g id="dn-armR" transform="translate(146 124)">${arm(-1)}</g>
+      <g id="dn-head" transform="translate(120 112)">
+        <g transform="translate(-120 -112)">
+          <rect x="111" y="100" width="18" height="14" rx="5" fill="#e2ab80" ${sw2}/>
+          <ellipse cx="91" cy="84" rx="7" ry="9" fill="${SKIN}" ${sw2}/><ellipse cx="149" cy="84" rx="7" ry="9" fill="${SKIN}" ${sw2}/>
+          <circle cx="120" cy="82" r="29" fill="${SKIN}" ${sw}/>
+          <circle cx="98" cy="92" r="6" fill="#f09a8a" opacity=".55"/><circle cx="142" cy="92" r="6" fill="#f09a8a" opacity=".55"/>
+          <g id="dn-eyes">
+            <ellipse cx="107" cy="78" rx="7" ry="8" fill="#fff" ${sw2}/><ellipse cx="133" cy="78" rx="7" ry="8" fill="#fff" ${sw2}/>
+            <circle id="dn-pupL" cx="108" cy="80" r="3.6" fill="${INK}"/><circle id="dn-pupR" cx="134" cy="80" r="3.6" fill="${INK}"/>
+            <circle cx="106.5" cy="78" r="1.3" fill="#fff"/><circle cx="132.5" cy="78" r="1.3" fill="#fff"/>
+          </g>
+          <path d="M98 66 Q107 59 116 65 M124 65 Q133 59 142 66" fill="none" stroke="${INK}" stroke-width="4.5" stroke-linecap="round"/>
+          <path d="M116 80 Q120 94 124 80 Q126 88 120 90 Q114 88 116 80Z" fill="#e3a273" ${sw2}/>
+          <path d="M108 104 Q120 122 132 104 Z" fill="#7a2230" ${sw2}/>
+          <path d="M113 110 Q120 116 127 110 Q120 108 113 110Z" fill="#e8808a"/>
+          <path id="dn-mus" d="M120 95 C108 88 90 90 82 100 C76 108 85 114 91 108 C88 122 106 122 120 106 C134 122 152 122 149 108 C155 114 164 108 158 100 C150 90 132 88 120 95 Z" fill="#241f1d" ${sw}/>
+          <path d="M96 100 C104 96 112 98 117 102 M144 100 C136 96 128 98 123 102" fill="none" stroke="#6a5a52" stroke-width="2.6" stroke-linecap="round"/>
+          <!-- papakha -->
+          <path d="M88 62 C82 40 92 20 120 18 C148 20 158 40 152 62 C140 54 100 54 88 62 Z" fill="#4a4543" ${sw}/>
+          <g fill="#5e5856" ${sw2}><circle cx="94" cy="52" r="7"/><circle cx="106" cy="46" r="7"/><circle cx="120" cy="44" r="7"/><circle cx="134" cy="46" r="7"/><circle cx="146" cy="52" r="7"/><circle cx="100" cy="34" r="7"/><circle cx="112" cy="28" r="7"/><circle cx="128" cy="28" r="7"/><circle cx="140" cy="34" r="7"/></g>
+          <path d="M96 24 C104 14 136 14 144 24 C136 30 104 30 96 24 Z" fill="${RED}" ${sw2}/>
+          <path d="M113 20 L120 12 L127 20" fill="none" stroke="${GOLD}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>`;
+}
+
+// ---------- posing ----------
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const smooth = (k) => { k = clamp01(k); return k * k * (3 - 2 * k); };
+const easeOutBack = (k) => { k = clamp01(k); const c = 1.7; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };
+const deg = (r) => (r * 180) / Math.PI;
+
+function pose(el, t) {
+  const $ = (id) => el.querySelector(`#dn-${id}`);
+  const root = $('root'), legL = $('legL'), legR = $('legR'), skirt = $('skirt');
+  const torso = $('torso'), head = $('head'), armL = $('armL'), armR = $('armR'), shadow = $('shadow');
+  const pupL = $('pupL'), pupR = $('pupR'), mus = $('mus'), legs = $('legs');
+
+  // phases
+  const enter = smooth(t / 0.5);
+  const galloping = smooth((t - 0.45) / 0.15) * (1 - smooth((t - 2.2) / 0.2));
+  const kneel = smooth((t - 2.25) / 0.25) * (1 - smooth((t - 3.45) / 0.2));
+  const leave = smooth((t - 3.5) / 0.5);
+
+  const beat = t * Math.PI * 2 * 2.1;                       // ~2 hops a second ... fast folk step
+  const hop = Math.abs(Math.sin(beat / 2)) * 26 * galloping;
+  const clap = Math.sin(t * 26);
+  const bounce = Math.abs(Math.sin(t * 9)) * 6 * kneel;
+
+  // two twirls: the body turns on the spot (squash across, flip, back)
+  const twirl = (a, b) => (t > a && t < b ? (t - a) / (b - a) : -1);
+  const u = twirl(0.95, 1.5) >= 0 ? twirl(0.95, 1.5) : twirl(1.6, 2.15);
+  const spinning = u >= 0;
+  const turn = spinning ? Math.cos(u * Math.PI * 2) : 1;
+  const flare = spinning ? 1 + 0.32 * Math.sin(u * Math.PI) : 1 + 0.06 * Math.sin(beat);
+
+  // root: enter from below with a bounce, leave sideways with a hop
+  const ty = (1 - easeOutBack(enter)) * 150 + kneel * 30 - hop + leave * -30 * Math.sin(leave * Math.PI);
+  const tx = leave * 200;
+  const sc = lerp(0.5, 1, easeOutBack(enter)) * (1 - leave * 0.35);
+  const sx = Math.abs(turn) < 0.12 ? 0.12 * Math.sign(turn || 1) : turn;
+  const sway = Math.sin(beat / 2) * 5 * galloping;
+  root.setAttribute('transform', `translate(${(120 + tx).toFixed(1)} ${(338 + ty).toFixed(1)}) rotate(${sway.toFixed(1)}) scale(${(sc * sx).toFixed(3)} ${sc.toFixed(3)}) translate(-120 -338)`);
+  el.style.opacity = String(clamp01(t / 0.12) * (1 - smooth((t - 3.8) / 0.2)));
+
+  // shadow shrinks as he leaps
+  const lift = hop / 26;
+  shadow.setAttribute('rx', String((62 * (1 - lift * 0.3) * sc).toFixed(1)));
+  shadow.setAttribute('cx', String((120 + tx).toFixed(1)));
+  shadow.setAttribute('opacity', String(1 - leave));
+
+  // skirt flares on twirls, shortens when he drops to the knee
+  skirt.setAttribute('transform', `translate(120 186) scale(${flare.toFixed(3)} ${(1 - kneel * 0.2).toFixed(3)}) translate(-120 -186)`);
+
+  // legs: alternate kicks while galloping; tucked under the skirt on the knee
+  const kick = Math.sin(beat / 2);
+  const legAng = (side) => deg(0.5) * kick * side * galloping;
+  const tuck = kneel * 30;
+  legL.setAttribute('transform', `translate(100 ${296 - tuck}) rotate(${(legAng(1) * 0.9).toFixed(1)}) scale(1 ${(1 - kneel * 0.35).toFixed(2)})`);
+  legR.setAttribute('transform', `translate(140 ${296 - tuck + kneel * 8}) rotate(${(legAng(-1) * 0.9 - kneel * 40).toFixed(1)})`);
+  legs.setAttribute('opacity', '1');
+
+  // torso & head
+  const lean = Math.sin(beat / 2 + 0.6) * 4 * galloping + Math.sin(t * 9) * 3 * kneel;
+  torso.setAttribute('transform', `translate(120 190) rotate(${lean.toFixed(1)}) translate(-120 -190)`);
+  const nod = Math.sin(t * 9) * 5 * (galloping + kneel);
+  head.setAttribute('transform', `translate(120 112) rotate(${(nod - lean * 0.5).toFixed(1)}) translate(0 ${(-bounce * 0.5).toFixed(1)})`);
+  mus.setAttribute('transform', `translate(120 106) scale(1 ${(1 + Math.sin(t * 18) * 0.04 * (galloping + kneel)).toFixed(3)}) translate(-120 -106)`);
+  const look = Math.sin(t * 5) * 1.6 * (galloping + kneel);
+  pupL.setAttribute('cx', String((108 + look).toFixed(1)));
+  pupR.setAttribute('cx', String((134 + look).toFixed(1)));
+
+  // arms: left = positive angle swings out, right = negative
+  const place = (g, side, up, wave) => {
+    // up 0 = hanging, 1 = out to the side, 2 = overhead
+    const base = up <= 1 ? lerp(8, 78, up) : lerp(78, 168, up - 1);
+    const ang = side * (base + wave * 8);
+    g.setAttribute('transform', `translate(${side === 1 ? 94 : 146} ${(124 + 0).toFixed(0)}) rotate(${ang.toFixed(1)})`);
+    const fore = g.querySelector('.fore');
+    const bend = side * (-(8 + wave * 22) - (up >= 1.9 ? 0 : 0));
+    fore.setAttribute('transform', `translate(0 34) rotate(${bend.toFixed(1)})`);
   };
-  const mesh = (geo, m, x = 0, y = 0, z = 0) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = false; return o; };
-  const cyl = (rt, rb, h, m, seg = 20) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), m);
-
-  const root = new THREE.Group(); // moves across the table
-  const spin = new THREE.Group(); // turns around the vertical axis
-  root.add(spin);
-  const pelvis = new THREE.Group(); // bobs up and down
-  spin.add(pelvis);
-
-  // legs: hip -> thigh -> knee -> shin -> boot
-  const legs = [-1, 1].map((side) => {
-    const hip = new THREE.Group();
-    hip.position.set(side * 0.12, 0, 0);
-    const thigh = cyl(0.085, 0.075, 0.4, M.trouser); thigh.position.y = -0.2; hip.add(thigh);
-    const knee = new THREE.Group(); knee.position.y = -0.4; hip.add(knee);
-    const shin = cyl(0.07, 0.06, 0.4, M.trouser); shin.position.y = -0.2; knee.add(shin);
-    const boot = cyl(0.075, 0.085, 0.24, M.boot); boot.position.set(0, -0.4, 0.015); knee.add(boot);
-    const toe = mesh(new THREE.SphereGeometry(0.085, 16, 12), M.boot, 0, -0.5, 0.06); toe.scale.set(1, 0.55, 1.35); knee.add(toe);
-    pelvis.add(hip);
-    return { hip, knee };
-  });
-
-  // the chokha: flared skirt with a gold hem, belt, dagger
-  const skirt = cyl(0.23, 0.42, 0.55, M.chokha, 32); skirt.position.y = -0.2; pelvis.add(skirt);
-  const hem = mesh(new THREE.TorusGeometry(0.42, 0.018, 8, 40), M.gold, 0, -0.47, 0); hem.rotation.x = Math.PI / 2; pelvis.add(hem);
-  const inner = cyl(0.22, 0.24, 0.1, M.cream, 24); inner.position.y = 0.0; pelvis.add(inner);
-  const belt = mesh(new THREE.TorusGeometry(0.235, 0.03, 8, 32), M.gold, 0, 0.04, 0); belt.rotation.x = Math.PI / 2; pelvis.add(belt);
-  const buckle = mesh(new THREE.BoxGeometry(0.07, 0.07, 0.03), M.gold, 0, 0.04, 0.245); pelvis.add(buckle);
-  const dagger = new THREE.Group(); dagger.position.set(0.1, 0.0, 0.25); dagger.rotation.z = 0.6;
-  dagger.add(mesh(new THREE.BoxGeometry(0.05, 0.3, 0.018), M.silver, 0, -0.17, 0));
-  dagger.add(mesh(new THREE.BoxGeometry(0.06, 0.12, 0.03), M.gold, 0, 0.0, 0));
-  pelvis.add(dagger);
-
-  // torso, chest gazyrs, collar
-  const torso = new THREE.Group(); torso.position.y = 0.06; pelvis.add(torso);
-  torso.add(mesh(new THREE.CylinderGeometry(0.25, 0.22, 0.6, 28), M.chokha, 0, 0.3, 0));
-  torso.add(mesh(new THREE.BoxGeometry(0.1, 0.5, 0.03), M.cream, 0, 0.3, 0.238));
-  for (const side of [-1, 1]) {
-    for (let i = 0; i < 5; i++) {
-      const x = side * (0.085 + i * 0.038);
-      const z = Math.sqrt(Math.max(0.0001, 0.245 * 0.245 - x * x));
-      const g = new THREE.Group(); g.position.set(x, 0.36, z); g.rotation.y = Math.atan2(x, z); g.rotation.z = -side * 0.07;
-      g.add(cyl(0.022, 0.022, 0.17, M.cream, 10));
-      g.add(mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.025, 10), M.gold, 0, 0.09, 0));
-      g.add(mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.02, 10), M.gold, 0, -0.09, 0));
-      torso.add(g);
-    }
-  }
-  const collar = mesh(new THREE.TorusGeometry(0.1, 0.03, 8, 20), M.cream, 0, 0.62, 0); collar.rotation.x = Math.PI / 2; torso.add(collar);
-  torso.add(cyl(0.065, 0.075, 0.1, M.skin, 14)).position.y = 0.66;
-
-  // head: face, moustache, papakha
-  const head = new THREE.Group(); head.position.y = 0.88; torso.add(head);
-  head.add(mesh(new THREE.SphereGeometry(0.19, 28, 22), M.skin));
-  for (const s of [-1, 1]) {
-    head.add(mesh(new THREE.SphereGeometry(0.024, 12, 10), M.eye, s * 0.072, 0.035, 0.172));
-    const brow = mesh(new THREE.BoxGeometry(0.075, 0.016, 0.02), M.hair, s * 0.075, 0.09, 0.172); brow.rotation.z = s * -0.18; head.add(brow);
-    const cheek = mesh(new THREE.SphereGeometry(0.034, 12, 10), M.cheek, s * 0.115, -0.035, 0.14); cheek.scale.set(1, 0.7, 0.5); head.add(cheek);
-    const ear = mesh(new THREE.SphereGeometry(0.04, 10, 8), M.skin, s * 0.185, 0, 0); ear.scale.set(0.5, 1, 0.8); head.add(ear);
-    // a big handlebar moustache: thick, rising outward, with curled tips
-    const mo = new THREE.Mesh(new THREE.CapsuleGeometry(0.036, 0.2, 6, 14), M.hair);
-    mo.position.set(s * 0.115, -0.07, 0.172); mo.rotation.z = Math.PI / 2 + s * 0.3; head.add(mo);
-    const tip = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.024, 8, 16, Math.PI * 1.35), M.hair);
-    tip.position.set(s * 0.255, -0.01, 0.14); tip.rotation.z = s > 0 ? Math.PI * 0.1 : Math.PI * 0.9; head.add(tip);
-  }
-  head.add(mesh(new THREE.SphereGeometry(0.036, 14, 12), M.skin, 0, -0.01, 0.19));
-  const mouth = mesh(new THREE.TorusGeometry(0.05, 0.008, 6, 16, Math.PI), M.red, 0, -0.085, 0.172); mouth.rotation.z = Math.PI; head.add(mouth);
-  // papakha: a low, fluffy fur cap (faceted sphere), not a top hat
-  const cap = new THREE.Group(); cap.position.y = 0.17; head.add(cap);
-  const fur = mesh(new THREE.IcosahedronGeometry(0.245, 2), M.fur); fur.scale.set(1, 0.78, 1); cap.add(fur);
-  const band = mesh(new THREE.TorusGeometry(0.2, 0.05, 10, 30), M.fur, 0, -0.1, 0); band.rotation.x = Math.PI / 2; cap.add(band);
-  const tuft = mesh(new THREE.CircleGeometry(0.075, 20), M.red, 0, 0.19, 0); tuft.rotation.x = -Math.PI / 2; cap.add(tuft);
-
-  // arms: shoulder -> upper -> elbow -> forearm -> hand (long chokha sleeves)
-  const arms = [-1, 1].map((side) => {
-    const shoulder = new THREE.Group(); shoulder.position.set(side * 0.3, 0.52, 0); torso.add(shoulder);
-    shoulder.add(mesh(new THREE.SphereGeometry(0.085, 14, 12), M.chokha));
-    const upper = cyl(0.07, 0.08, 0.32, M.chokha, 14); upper.position.y = -0.16; shoulder.add(upper);
-    const elbow = new THREE.Group(); elbow.position.y = -0.32; shoulder.add(elbow);
-    elbow.add(mesh(new THREE.SphereGeometry(0.075, 12, 10), M.chokha));
-    const fore = cyl(0.08, 0.115, 0.34, M.chokha, 14); fore.position.y = -0.17; elbow.add(fore);
-    const cuff = mesh(new THREE.TorusGeometry(0.115, 0.014, 6, 20), M.gold, 0, -0.34, 0); cuff.rotation.x = Math.PI / 2; elbow.add(cuff);
-    elbow.add(mesh(new THREE.SphereGeometry(0.062, 14, 12), M.skin, 0, -0.4, 0));
-    return { shoulder, elbow };
-  });
-
-  // soft contact shadow
-  const shadow = mesh(new THREE.CircleGeometry(0.45, 28), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false }));
-  shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.005;
-
-  return { root, spin, pelvis, legs, skirt, hem, torso, head, arms, shadow };
+  const intro = enter * (1 - galloping) * (1 - kneel) * (1 - smooth((t - 3.5) / 0.3));
+  const upBase = 0.15 + galloping * 0.9 + kneel * 1.8 + leave * 0.3;
+  const waveG = Math.sin(t * 12);
+  const waveL = galloping * waveG + kneel * (clap > 0 ? 0.5 : -0.6) + intro * 0.2;
+  const waveR = -galloping * waveG + kneel * (clap > 0 ? 0.5 : -0.6) - intro * 0.2;
+  place(armL, 1, upBase, waveL);
+  place(armR, -1, upBase + (galloping > 0 && !spinning ? 0.15 * Math.sin(beat) : 0), waveR);
 }
 
-async function ensureRig(width, height) {
-  const THREE = await load();
-  if (!rig) {
-    const canvas = document.createElement('canvas');
-    canvas.className = 'dancer-canvas';
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, premultipliedAlpha: true });
-    renderer.setClearColor(0x000000, 0);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    const scene = new THREE.Scene();
-    scene.add(new THREE.HemisphereLight(0xfff2dd, 0x4a3320, 1.55));
-    const sun = new THREE.DirectionalLight(0xfff0d0, 2.2); sun.position.set(2.5, 5, 4); scene.add(sun);
-    const rim = new THREE.DirectionalLight(0xffc27a, 0.9); rim.position.set(-3, 2, -3); scene.add(rim);
-    const parts = build(THREE);
-    scene.add(parts.shadow);
-    scene.add(parts.root);
-    const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 50);
-    rig = { THREE, renderer, scene, camera, canvas, parts };
-  }
-  rig.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-  rig.renderer.setSize(width, height, false);
-  rig.canvas.style.width = `${width}px`;
-  rig.canvas.style.height = `${height}px`;
-  rig.camera.aspect = width / height;
-  rig.camera.position.set(0, 1.45, 6.3);
-  rig.camera.lookAt(0, 1.02, 0);
-  rig.camera.updateProjectionMatrix();
-  return rig;
-}
+// ---------- public ----------
+export function webglAvailable() { return true; } // kept for callers; the dancer is plain SVG now
 
-export function webglAvailable() {
-  try { const c = document.createElement('canvas'); return !!(c.getContext('webgl2') || c.getContext('webgl')); } catch { return false; }
-}
-
-// Poses are eased toward their targets every frame, so phase changes look smooth.
-function makeState() {
-  return { ax: 0.2, az: 0.1, bend: 0, lean: 0, flare: 1, kneel: 0, lift: 0, wave: 0 };
-}
-
-function frame(parts, st, t, dt) {
-  const T = DURATION;
-  const enterEnd = 0.95, glideEnd = 1.75, spinEnd = 2.6, kneelEnd = 3.15;
-  const ease = (cur, target, rate = 16) => cur + (target - cur) * (1 - Math.exp(-dt * rate));
-
-  let x = 0, hop = 0, face = 0;
-  let armUp = 0.15, armFlap = 0, bend = 0, lift = 0, kneel = 0, lean = 0, flare = 1, wave = 0;
-
-  if (t < enterEnd) {                                     // hop in from the left
-    const p = t / enterEnd;
-    x = lerp(-3.7, -0.15, easeOut(p));
-    hop = Math.abs(Math.sin(p * Math.PI * 4)) * 0.2;
-    armUp = 0.5; armFlap = 0.25 * Math.sin(t * 18);
-    bend = 0.25 * Math.abs(Math.cos(p * Math.PI * 4));
-  } else if (t < glideEnd) {                              // toe-stepping, arms like wings
-    const k = t - enterEnd;
-    x = -0.15 + 0.5 * Math.sin(k * 5.2);
-    hop = 0.06 + 0.05 * Math.abs(Math.sin(k * 14));
-    armUp = 1.45; armFlap = 0.22 * Math.sin(k * 11);
-    lift = Math.sin(k * 11);
-    lean = 0.1 * Math.sin(k * 5.2);
-    face = 0.35 * Math.sin(k * 5.2);
-  } else if (t < spinEnd) {                               // two fast turns, skirt flaring
-    const p = (t - glideEnd) / (spinEnd - glideEnd);
-    x = 0.35 - 0.35 * easeInOut(p);
-    face = easeInOut(p) * Math.PI * 4;
-    armUp = 1.55; armFlap = 0.12 * Math.sin(t * 20);
-    hop = 0.1 * Math.sin(p * Math.PI);
-    flare = 1 + 0.32 * Math.sin(p * Math.PI);
-    lean = 0.06;
-  } else if (t < kneelEnd) {                              // drop to one knee, arms thrown up
-    const p = (t - spinEnd) / (kneelEnd - spinEnd);
-    kneel = easeOut(clamp01(p * 2));
-    armUp = 2.5 - 0.15 * Math.sin(t * 16); armFlap = 0.15 * Math.sin(t * 16);
-    lean = -0.12;
-  } else if (t < T - 0.65) {                              // bounce back up and clap
-    const p = (t - kneelEnd) / (T - 0.65 - kneelEnd);
-    kneel = 1 - easeOut(clamp01(p * 3));
-    armUp = lerp(2.4, 1.0, clamp01(p * 2)); armFlap = 0.18 * Math.sin(t * 22);
-    hop = 0.14 * Math.abs(Math.sin(p * Math.PI * 2));
-  } else {                                                // hop out to the right, waving
-    const p = (t - (T - 0.65)) / 0.65;
-    x = lerp(-0.15, 3.8, easeInOut(p));
-    hop = Math.abs(Math.sin(p * Math.PI * 4)) * 0.2;
-    armUp = 0.3; wave = 1;
-    bend = 0.2 * Math.abs(Math.cos(p * Math.PI * 4));
-    face = -0.4 * Math.sin(p * Math.PI);
-  }
-
-  st.az = ease(st.az, armUp); st.ax = ease(st.ax, armFlap, 30);
-  st.bend = ease(st.bend, bend); st.lift = ease(st.lift, lift, 24); st.kneel = ease(st.kneel, kneel, 22);
-  st.lean = ease(st.lean, lean); st.flare = ease(st.flare, flare, 20); st.wave = ease(st.wave, wave);
-
-  const { root, spin, pelvis, legs, skirt, hem, torso, head, arms, shadow } = parts;
-  const pop = Math.min(1, t / 0.18) * Math.min(1, (T - t) / 0.12);
-  root.scale.setScalar(Math.max(0.001, pop));
-  root.position.x = x;
-  spin.rotation.y = face;
-  shadow.position.x = x;
-  shadow.scale.setScalar(Math.max(0.2, 1 - hop * 1.3) * pop * (1 + st.kneel * 0.1));
-
-  // legs: squat, toe-step, kneel
-  const b = st.bend;
-  const stand = 0.82 * Math.cos(0.9 * b);
-  const kneelDrop = 0.36 * st.kneel;
-  pelvis.position.y = stand - kneelDrop + hop;
-  legs.forEach((leg, i) => {
-    const alt = i === 0 ? 1 : -1;
-    const stepLift = Math.max(0, st.lift * alt) * 0.55;
-    // left leg stays forward, right leg goes down on the knee
-    const kneelThigh = i === 0 ? -1.15 : -0.05;
-    const kneelShin = i === 0 ? 1.15 : 1.75;
-    leg.hip.rotation.x = lerp(-0.9 * b - stepLift, kneelThigh, st.kneel);
-    leg.knee.rotation.x = lerp(1.8 * b + stepLift * 1.3, kneelShin, st.kneel);
-  });
-  skirt.scale.set(st.flare, 1, st.flare);
-  hem.scale.set(st.flare, st.flare, 1);
-
-  torso.rotation.z = st.lean;
-  torso.rotation.x = -0.05 - st.kneel * 0.1;
-  head.rotation.z = -st.lean * 0.6 + 0.08 * Math.sin(t * 9);
-  head.rotation.y = 0.18 * Math.sin(t * 6);
-
-  arms.forEach((arm, i) => {
-    const side = i === 0 ? -1 : 1;
-    let z = st.az;
-    if (st.wave > 0.01 && side === 1) z = lerp(z, 2.4 + 0.3 * Math.sin(t * 20), st.wave);
-    arm.shoulder.rotation.z = side * z;
-    arm.shoulder.rotation.x = side * st.ax * 0.6;
-    arm.elbow.rotation.z = side * (0.2 + 0.35 * Math.sin(t * 13 + i * 1.7) * Math.min(1, st.az));
-  });
-}
-
-// Plays one dance. `box` is the table's rectangle on screen. Resolves when he has left.
 export async function playDancer(box, onStart) {
-  if (!webglAvailable()) return false;
-  const width = Math.round(Math.min(Math.max(box.width, 360), 760));
-  const height = Math.round(Math.min(Math.max(box.height * 1.0, 320), 440)); // headroom for leaps
-  const r = await ensureRig(width, height);
   const host = document.getElementById('fx');
-  r.canvas.style.left = `${box.left + box.width / 2 - width / 2}px`;
-  r.canvas.style.top = `${box.top + box.height * 0.56 - height * 0.62}px`;
-  host.appendChild(r.canvas);
-
-  const st = makeState();
+  if (!host) return false;
+  const height = Math.round(Math.min(Math.max(box.height * 0.86, 250), 380));
+  const width = Math.round((height * 240) / 350);
+  const el = document.createElement('div');
+  el.className = 'dancer-canvas';
+  el.style.width = `${width}px`;
+  el.style.height = `${height}px`;
+  el.style.left = `${box.left + box.width / 2 - width / 2}px`;
+  el.style.top = `${box.top + box.height - height * 0.96}px`; // feet on the lower edge of the cloth
+  el.innerHTML = markup();
+  host.appendChild(el);
+  pose(el, 0);
   if (onStart) onStart();
   const t0 = performance.now();
-  let last = t0;
   await new Promise((resolve) => {
     const tick = (now) => {
       const t = (now - t0) / 1000;
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
       if (t >= DURATION) { resolve(); return; }
-      frame(r.parts, st, t, dt);
-      r.renderer.render(r.scene, r.camera);
+      pose(el, t);
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   });
-  r.canvas.remove();
+  el.remove();
   return true;
 }
 
 export const DANCER_SECONDS = DURATION;
+
+// for tests and previews
+export const dancerMarkup = markup;
+export const dancerPose = pose;

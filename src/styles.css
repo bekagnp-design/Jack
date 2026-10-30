@@ -503,7 +503,8 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 }
 .felt.t-ambani .deck .count { background: #1b1612; color: #f6eed8; }
 @media (max-width: 520px) { .felt.t-ambani::before { font-size: 22px; } }
-.dancer-canvas { position: fixed; z-index: 84; pointer-events: none; }
+.dancer-canvas { position: fixed; z-index: 84; pointer-events: none; filter: drop-shadow(0 6px 10px rgba(0,0,0,.25)); }
+.dancer-svg { width: 100%; height: 100%; overflow: visible; display: block; }
 
 /* ---------- furti stickers ---------- */
 .sticker-fx {
@@ -577,3 +578,47 @@ table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabu
 }
 @keyframes hero-pop { 0% { opacity: 0; scale: .2; rotate: -18deg; } 14% { opacity: 1; scale: 1.18; rotate: 5deg; } 26% { scale: 1.05; rotate: -2deg; } 50% { scale: 1.1; rotate: 2deg; } 82% { opacity: 1; } 100% { opacity: 0; scale: .9; translate: 0 -16px; } }
 @media (prefers-reduced-motion: reduce) { .hero-card { animation: none; } }
+
+/* ---------- v0.3 polish: top-bar icons, emote picker, bubbles ---------- */
+.btn.icon, .btn.icon.emote-btn, .btn.icon[data-act="theme"] {
+  width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 50%; display: inline-grid; place-items: center; line-height: 0; font-size: 0;
+  background: linear-gradient(180deg, #243238, #1a252a); border-color: #3b4e54; color: var(--brass);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .25);
+  transition: transform .12s, border-color .15s, color .15s, box-shadow .15s;
+}
+.btn.icon:hover { border-color: var(--brass); color: #f0d594; box-shadow: 0 0 0 3px rgba(212, 176, 106, .15), 0 2px 6px rgba(0, 0, 0, .25); }
+.btn.icon:active { transform: scale(.94); }
+.btn.icon .ico { display: block; }
+.game-top .r .btn:not(.icon) { border-radius: 999px; background: linear-gradient(180deg, #243238, #1a252a); border-color: #3b4e54; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06); }
+.game-top .r .btn.danger { color: #f0a5a2; border-color: #7a3a38; background: linear-gradient(180deg, #3a2426, #2a1a1c); }
+
+.emote-pop {
+  background: linear-gradient(180deg, rgba(36, 48, 54, .98), rgba(24, 33, 37, .98)); border: 1px solid #46595f; border-radius: 22px;
+  padding: 12px 12px 14px; gap: 10px; width: min(380px, calc(100% - 24px)); backdrop-filter: blur(8px);
+  box-shadow: 0 22px 50px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .06); animation: pop-up .18s ease-out;
+}
+@keyframes pop-up { from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(.97); } to { opacity: 1; transform: translateX(-50%); } }
+.pop-title { font-family: var(--font-display); font-size: 18px; color: var(--brass); letter-spacing: .04em; justify-self: start; padding-left: 4px; }
+.emote-grid { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.emote {
+  gap: 3px; padding: 9px 2px 7px; border-radius: 16px; border: 1px solid #3a4a50; background: linear-gradient(180deg, #1f2b30, #172126);
+  transition: transform .12s, border-color .15s, background .15s;
+}
+.emote .e { font-size: 30px; line-height: 1.15; filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .3)); transition: transform .15s; }
+.emote .t { font-size: 10.5px; color: var(--muted); }
+.emote:hover:not(:disabled) { border-color: var(--brass); background: linear-gradient(180deg, #2a3a40, #1d2a30); transform: translateY(-2px); }
+.emote:hover:not(:disabled) .e { transform: scale(1.18) rotate(-4deg); }
+.emote:active:not(:disabled) { transform: scale(.95); }
+.pop-opts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; width: 100%; padding-top: 8px; border-top: 1px solid #2f3d43; }
+.chip-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 999px; border: 1px solid #3a4a50; background: #1b262b;
+  color: var(--text); font: inherit; font-size: 12px; cursor: pointer; transition: border-color .15s, color .15s;
+}
+.chip-btn .ico { width: 15px; height: 15px; color: var(--brass); flex: none; }
+.chip-btn:hover { border-color: var(--brass); }
+.chip-btn.off { color: var(--muted); } .chip-btn.off .ico { color: var(--muted); }
+
+.bubble { animation: bubble-boing .5s cubic-bezier(.3, 1.6, .5, 1) both; }
+.bubble .e { font-size: 28px; }
+@keyframes bubble-boing { 0% { opacity: 0; scale: .2; rotate: -18deg; } 60% { opacity: 1; scale: 1.25; rotate: 8deg; } 100% { opacity: 1; scale: 1; rotate: 0deg; } }
+@media (max-width: 520px) { .emote .e { font-size: 27px; } .emote-pop { padding: 10px 10px 12px; } }

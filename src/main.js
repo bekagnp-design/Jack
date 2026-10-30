@@ -56,12 +56,23 @@ const THEME_KEY = 'eleven.table';
 function tableTheme() { try { const v = localStorage.getItem(THEME_KEY); return THEMES.includes(v) ? v : 'ambani'; } catch { return 'wood'; } }
 function nextTheme() { const n = THEMES[(THEMES.indexOf(tableTheme()) + 1) % THEMES.length]; try { localStorage.setItem(THEME_KEY, n); } catch { /* ignore */ } }
 
+// Line icons for the top bar (emoji look different on every phone; these do not).
+const svgIcon = (d) => `<svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  palette: svgIcon('<path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-.9 2-1.8 0-1.2-1-1.4-1-2.5 0-1 .8-1.7 1.9-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.2" r="1"/><circle cx="15" cy="7.8" r="1"/>'),
+  smile: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M8.2 14.2c1 1.5 2.3 2.2 3.8 2.2s2.8-.7 3.8-2.2"/><path d="M9 9.6h.01M15 9.6h.01" stroke-width="2.6"/>'),
+  mask: svgIcon('<path d="M4 5c5 1.5 11 1.5 16 0v6c0 4.5-3.5 8-8 8s-8-3.5-8-8z"/><path d="M8.5 10.5h.01M15.5 10.5h.01" stroke-width="2.6"/><path d="M9 14.5c1.7 1.4 4.3 1.4 6 0"/>'),
+  bell: svgIcon('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/>'),
+  dance: svgIcon('<circle cx="12" cy="5" r="2.2"/><path d="M12 8v6l-3 6M12 14l3 6M7 10l5-2 5 2"/>'),
+};
+
 // ---------- emotes ----------
 // Quick reactions instead of free text: no insults, no walls of chat.
 // Each opponent can be muted separately; the choice is kept in this browser.
 const EMOTES = [
-  { id: 'gg', icon: '👍' }, { id: 'haha', icon: '😄' }, { id: 'wow', icon: '😮' }, { id: 'furti', icon: '🔥' },
-  { id: 'cheers', icon: '🥂' }, { id: 'thanks', icon: '🙏' }, { id: 'hurry', icon: '⏳' }, { id: 'oops', icon: '😢' },
+  { id: 'gg', icon: '👏' }, { id: 'haha', icon: '😂' }, { id: 'wow', icon: '🤯' }, { id: 'furti', icon: '🔥' },
+  { id: 'cheers', icon: '🍷' }, { id: 'thanks', icon: '🙏' }, { id: 'hurry', icon: '⏳' }, { id: 'oops', icon: '😭' },
+  { id: 'cool', icon: '😎' }, { id: 'think', icon: '🤔' }, { id: 'party', icon: '🥳' }, { id: 'again', icon: '🤝' },
 ];
 const EMOTE_COOLDOWN_MS = 3000;
 const EMOTE_SHOW_MS = 2500;
@@ -1067,8 +1078,8 @@ function viewGame() {
     <div class="game-top">
       <div class="l"><span class="code">${esc(S.local?.tut ? t('tut.title') : isLocal() ? t('offline.title') : S.room.code)}</span><span class="only-wide">${esc(t('game.deal', { n: g.dealNo }))}</span><span class="only-wide">·</span><span class="only-wide">${esc(t('score.target', { n: g.targetScore }))}</span>${d ? `<span class="only-wide">·</span><span class="only-wide">${esc(t('game.deck', { n: d.deckCount }))}</span>` : ''}</div>
       <div class="r">
-        <button class="btn small ghost icon" data-act="theme" aria-label="${esc(t('table.theme'))}" title="${esc(t('table.theme'))}">🎨</button>
-        <button class="btn small ghost icon emote-btn" data-act="emotes" aria-label="${esc(t('emote.title'))}" title="${esc(t('emote.title'))}">😊</button>
+        <button class="btn small ghost icon" data-act="theme" aria-label="${esc(t('table.theme'))}" title="${esc(t('table.theme'))}">${ICON.palette}</button>
+        <button class="btn small ghost icon emote-btn" data-act="emotes" aria-label="${esc(t('emote.title'))}" title="${esc(t('emote.title'))}">${ICON.smile}</button>
         ${soundButton()}
         <button class="btn small ghost" data-act="lang" aria-label="${esc(t('lang.switch'))}"><span class="only-wide">${esc(t('lang.switch'))}</span><span class="only-narrow">${esc(t('lang.short'))}</span></button>
         <button class="btn small ghost" data-act="rules" aria-label="${esc(t('nav.rules'))}"><span class="only-wide">${esc(t('nav.rules'))}</span><span class="only-narrow">?</span></button>
@@ -1105,11 +1116,15 @@ function viewGame() {
 
 function emotePicker() {
   const cool = Date.now() < S.emoteCool;
+  const eOff = emotesOff(), dOff = dancerOff();
   return `<div class="emote-pop" role="dialog" aria-label="${esc(t('emote.title'))}">
+    <div class="pop-title">${esc(t('emote.title'))}</div>
     <div class="emote-grid">${EMOTES.map((e) => `<button class="emote" data-act="emote" data-id="${e.id}" ${cool ? 'disabled' : ''}><span class="e">${e.icon}</span><span class="t">${esc(t(`emote.${e.id}`))}</span></button>`).join('')}</div>
-    <button class="btn small ghost" data-act="emotesoff">${esc(emotesOff() ? t('emote.on') : t('emote.off'))}</button>
-    <button class="btn small ghost" data-act="stickerpicker">🎭 ${esc(t('sticker.title'))}</button>
-    <button class="btn small ghost" data-act="dancer">${esc(dancerOff() ? t('dancer.on') : t('dancer.off'))}</button>
+    <div class="pop-opts">
+      <button class="chip-btn ${eOff ? 'off' : ''}" data-act="emotesoff">${ICON.bell}<span>${esc(eOff ? t('emote.on') : t('emote.off'))}</span></button>
+      <button class="chip-btn" data-act="stickerpicker">${ICON.mask}<span>${esc(t('sticker.title'))}</span></button>
+      <button class="chip-btn ${dOff ? 'off' : ''}" data-act="dancer">${ICON.dance}<span>${esc(dOff ? t('dancer.on') : t('dancer.off'))}</span></button>
+    </div>
   </div>`;
 }
 
